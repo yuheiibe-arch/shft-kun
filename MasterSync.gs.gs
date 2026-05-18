@@ -2,7 +2,7 @@
 // 【MasterSync】マスタへの転記・シフト展開・計算 (完全動的・医師免許対応版)
 // ==========================================
 
-function syncAndExpandSchedule(headers, rowData, contractText, fiscalYear) {
+function syncAndExpandSchedule(headers, rowData, contractText, fiscalYear, contractWithBreakText) {
   if (!fiscalYear || !contractText) {
     console.warn("年度または契約テキストがないため、マスタ転記をスキップしました。");
     return;
@@ -38,12 +38,17 @@ function syncAndExpandSchedule(headers, rowData, contractText, fiscalYear) {
 
   // 3. 基本データの準備（見出し名で動的取得）
   const medId = getValueByHeader(headers, rowData, "医籍番号");
-  const name = getValueByHeader(headers, rowData, "氏名");
+  const name = getValueByHeader(headers, rowData, "氏名") || getValueByHeader(headers, rowData, "医師名");
   const joinDate = getValueByHeader(headers, rowData, "入職日");
   const specialty = getValueByHeader(headers, rowData, "専門科") || getValueByHeader(headers, rowData, "専門");
   
   // ★追加：医師免許取得日の動的取得
   const licenseDate = getValueByHeader(headers, rowData, "医師免許取得日") || getValueByHeader(headers, rowData, "医師免許取得");
+
+  // ★追加：jinjer番号とシメイの取得・整形
+  const jinjerId = getValueByHeader(headers, rowData, "jinjer番号") || "";
+  const kanaRaw = getValueByHeader(headers, rowData, "シメイ") || getValueByHeader(headers, rowData, "フリガナ") || getValueByHeader(headers, rowData, "カナ") || "";
+  const cleanKana = String(kanaRaw).replace(/[\s　\/／]/g, "").trim();
   
   // 祝日・年末年始
   const holidayHeader = type === "常勤" ? "【常勤】 祝日" : "【定期非常勤】 祝日";
@@ -81,7 +86,10 @@ function syncAndExpandSchedule(headers, rowData, contractText, fiscalYear) {
   // 転記用データマップ（シートの列名と紐付け）
   const dataMap = {
     "医籍番号": medId,
+    "jinjer番号": jinjerId,         // ★追加
     "医師名": name,
+    "氏名": name,
+    "シメイ": cleanKana,            // ★追加
     "入職日": joinDate,
     "専門": specialty,      
     "専門科": specialty,    
@@ -92,6 +100,7 @@ function syncAndExpandSchedule(headers, rowData, contractText, fiscalYear) {
     "年末年始": newYearSimple,  
     "週労働": weeklyHours,
     "勤務備考": contractText,   
+    "勤務備考（休憩あり）": contractWithBreakText, // ★追加
     "時給": wage,
     "契約時給": wage
   };
@@ -196,6 +205,7 @@ function getNextNumber(sheet) {
   const max = values.reduce((a, b) => Math.max(Number(a) || 0, Number(b) || 0), 0);
   return max + 1;
 }
+
 /**
  * ==========================================
  * 外部シートからの自動更新リクエストを受け取るWeb API
