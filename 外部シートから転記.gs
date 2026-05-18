@@ -228,63 +228,54 @@ const ExternalDataImporter = {
   },
 
   /**
-   * 3. 常勤用のデータ成形
+   * 3. 常勤用のデータ成形 (完全動的化)
    */
   formatFullTimeSheet_: function(sheet) {
-    const maxCols = sheet.getMaxColumns();
-    if (maxCols > 25) {
-      sheet.deleteColumns(26, maxCols - 25);
-    }
-
     const data = sheet.getDataRange().getValues();
-    const headers = data[0];
+    let headers = data[0];
     
-    let retireIdx = 5; 
-    for (let c = 0; c < headers.length; c++) {
-      if (String(headers[c]).includes("退職")) {
-        retireIdx = c;
-        break;
+    // 退職者の除外
+    const retireIdx = headers.findIndex(h => String(h).includes("退職"));
+    if (retireIdx > -1) {
+      for (let i = data.length - 1; i > 0; i--) {
+        const retirementDate = String(data[i][retireIdx]).trim();
+        if (retirementDate !== "") {
+          sheet.deleteRow(i + 1);
+        }
       }
     }
 
-    for (let i = data.length - 1; i > 0; i--) {
-      const retirementDate = String(data[i][retireIdx]).trim();
-      if (retirementDate !== "") {
-        sheet.deleteRow(i + 1);
+    // 作業用列のクリア（名前で動的に検索）
+    const clearKeywords = ["保留", "対応状況", "内容修正", "次年度用", "前年度からの変更"];
+    clearKeywords.forEach(kw => {
+      const idx = headers.findIndex(h => String(h).includes(kw));
+      if (idx > -1 && sheet.getLastRow() > 1) {
+        sheet.getRange(2, idx + 1, sheet.getLastRow() - 1, 1).clearContent();
       }
-    }
+    });
 
     const newLastRow = sheet.getLastRow();
-    const newMaxCols = sheet.getMaxColumns();
     if (newLastRow > 1) {
-      sheet.getRange(2, 14, newLastRow - 1, 2).clearContent();
-      sheet.getRange(2, 1, newLastRow - 1, newMaxCols).setBackground(null);
+      sheet.getRange(2, 1, newLastRow - 1, sheet.getMaxColumns()).setBackground(null);
     }
   },
 
   /**
-   * 4. 定期非常勤用のデータ成形
+   * 4. 定期非常勤用のデータ成形 (完全動的化)
    */
   formatPartTimeSheet_: function(sheet, targetYear) {
     const data = sheet.getDataRange().getValues();
-    const headers = data[0]; 
+    let headers = data[0]; 
     
     // 各項目の列インデックスを動的に検索
-    let retireIdx = 5;     // デフォルトF列
-    let notNeededIdx = 10; // デフォルトK列
-    let hireIdx = -1;      // 入職日（デフォルトなし）
-
-    for (let c = 0; c < headers.length; c++) {
-      const h = String(headers[c]);
-      if (h.includes("退職")) retireIdx = c;
-      if (h.includes("対応不要")) notNeededIdx = c;
-      if (h.includes("入職")) hireIdx = c;
-    }
+    let retireIdx = headers.findIndex(h => String(h).includes("退職"));
+    let notNeededIdx = headers.findIndex(h => String(h).includes("対応不要"));
+    let hireIdx = headers.findIndex(h => String(h).includes("入職"));
     
     // 不要な行の除外（下から上へ）
     for (let i = data.length - 1; i > 0; i--) {
-      const retirementDate = String(data[i][retireIdx]).trim();
-      const isNotNeeded = data[i][notNeededIdx];
+      const retirementDate = retireIdx > -1 ? String(data[i][retireIdx]).trim() : "";
+      const isNotNeeded = notNeededIdx > -1 ? data[i][notNeededIdx] : false;
       const isSkip = (isNotNeeded === true || String(isNotNeeded).toUpperCase() === "TRUE");
 
       if (retirementDate !== "" || isSkip) {
@@ -300,24 +291,17 @@ const ExternalDataImporter = {
       sheet.getRange(2, hireIdx + 1, newLastRow - 1, 1).setValue(newHireDate);
     }
 
-    // 【追加ルール2,3】列の整理 (Q, R, S列を残して左に詰める)
-    // 現在: A~I(1~9), J~M(10~13), N(14), O~P(15~16), Q(17), R(18), S(19)...
-    
-    // 1. J, K, L, M列 (10~13) を削除
-    sheet.deleteColumns(10, 4);
-    // これにより、旧N列が10列目(J)、旧O, P列が11, 12列目になる
-
-    // 2. 旧O, P列にあたる11列目と12列目を削除
-    sheet.deleteColumns(11, 2);
-    // これにより、旧Q, R, S列がそれぞれ 11(K), 12(L), 13(M)列目として並ぶ
-
-    // 3. J列（旧N列）のヘッダーを「勤務備考」に変更
-    sheet.getRange(1, 10).setValue("勤務備考");
-
-    // 4. 残したS列（現在の13列目/M列）より右側をすべて削除
-    const maxCols = sheet.getMaxColumns();
-    if (maxCols > 13) {
-      sheet.deleteColumns(14, maxCols - 13);
+    // 【動的列整理】元の「J列〜M列削除」などの代わりに、不要な列を名前で検索してすべて削除する
+    headers = sheet.getRange(1, 1, 1, sheet.getMaxColumns()).getValues()[0];
+    for (let c = headers.length - 1; c >= 0; c--) {
+      const h = String(headers[c]);
+      // 調整用に使っていた「保留」「対応不要」「記入例」「ルール」「対応状況」「内容修正」列を消す
+      if (h.includes("保留") || h.includes("対応不要") || h.includes("記入例") || h.includes("ルール") || h.includes("内容修正") || h.includes("対応状況")) {
+        sheet.deleteColumn(c + 1);
+      } else if (h.includes("提案シフト")) {
+        // 次年度の「提案シフト」を本番の「勤務備考」に昇格（名前変更）させる
+        sheet.getRange(1, c + 1).setValue("勤務備考");
+      }
     }
     
     // 背景色をクリア（白に戻す）
