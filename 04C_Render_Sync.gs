@@ -68,11 +68,18 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
       for (let i = 0; i < finalT.length && i < 7; i++) { vals[i] = finalT[i]; bgs[i] = teikiColor; }
       sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
     }
+    
+    /* ========================================================================
+    ★修正箇所：先行応募（単発）の医師名を、関係のない別の月にまで上書きコピー
+    してしまうのを防ぐため、ここでの一括書き込み処理を無効化しています。
+    ※プルダウンリストへの追加や色分け設定は下の処理で引き続き行われます。
+    ========================================================================
     else if (labelA === "先行応募" || labelA === "先行応募医師") {
       let vals = new Array(7).fill(""); let bgs = new Array(7).fill(emptyColor);
       for (let i = 0; i < finalS.length && i < 7; i++) { vals[i] = finalS[i]; bgs[i] = senkouColor; }
       sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
     }
+    */
     
     // 1診目、2診目の行のルールを、メモリ上でサクサク書き換える
     if (labelC === "1診目" || labelC === "2診目") {
