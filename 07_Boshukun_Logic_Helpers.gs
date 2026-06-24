@@ -12,7 +12,8 @@ function _debug_initHolidayMap(yearStr) {
   _holidayMap = {};
   try {
     const url = 'https://docs.google.com/spreadsheets/d/1WlmirSDOPnIcV2cwY5ClXkMWBFMM-4zrAw4XFDNUPGw/edit';
-    const ss = SpreadsheetApp.openByUrl(url);
+    // ★ここを safeOpenByUrl に変更
+    const ss = safeOpenByUrl(url);
     let sheet = ss.getSheetByName(yearStr) || ss.getSheetByName(`${yearStr}年度`);
     if (!sheet) return;
 
@@ -144,7 +145,8 @@ function _buildOpenDateMap(locNames) {
   const map = {};
   try {
     const masterUrl = 'https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit';
-    const ss = SpreadsheetApp.openByUrl(masterUrl);
+    // ★ここを safeOpenByUrl に変更
+    const ss = safeOpenByUrl(masterUrl);
     const sheet = ss.getSheetByName('拠点名');
     const data = sheet.getDataRange().getValues();
     for(let i = 1; i < data.length; i++) {

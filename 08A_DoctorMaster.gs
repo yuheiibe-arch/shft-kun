@@ -30,7 +30,8 @@ function _fetchDoctorTypes(ctx) {
   
   try {
     const extSsUrl = "https://docs.google.com/spreadsheets/d/1aEjphEv_63SeWQmwiOy9sx7IrMfawU01sHbKd_Ki4iA/edit";
-    const extSs = SpreadsheetApp.openByUrl(extSsUrl);
+    // ★ここを safeOpenByUrl に変更
+    const extSs = safeOpenByUrl(extSsUrl);
     
     const getLatestSheetByPrefix = (ss, prefix) => {
       const sheets = ss.getSheets().filter(s => s.getName().startsWith(prefix));

@@ -45,13 +45,14 @@ function updateShiftStatus() {
   // =========================================================
   function normalizeName(name) {
     if (!name) return '';
-    return String(name).replace(/[\s　]+/g, '').replace(/先生$/, '');
+    return String(name).replace(/[\s ]+/g, '').replace(/先生$/, '');
   }
 
   // =========================================================
   // 1. 外部シートから「全対象医師」と「完了」のリストを取得
   // =========================================================
-  const extSs = SpreadsheetApp.openByUrl(EXTERNAL_SS_URL);
+  // ★ ここを safeOpenByUrl に変更
+  const extSs = safeOpenByUrl(EXTERNAL_SS_URL);
   
   const targetDoctors = new Set();    // 常勤・定期非常勤の全医師リスト
   const completedDoctors = new Set(); // そのうち「完了」している医師リスト

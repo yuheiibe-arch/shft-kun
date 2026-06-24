@@ -29,7 +29,8 @@ const NewWageEngine = (function() {
   function _init() {
     if (_isInitialized) return;
     try {
-      const wageMasterSs = SpreadsheetApp.openByUrl(CONFIG.WAGE_MASTER_URL);
+      // ★ここを safeOpenByUrl に変更
+      const wageMasterSs = safeOpenByUrl(CONFIG.WAGE_MASTER_URL);
 
       _locDicts = _buildLocationDictionary(wageMasterSs);
       _baseWageDB = _buildBaseWageDB(wageMasterSs, _locDicts.nameMap);
@@ -150,7 +151,7 @@ const NewWageEngine = (function() {
       
       // 表記ゆれ（エイリアス）の登録
       for (let j = 1; j <= 4; j++) {
-        let variant = row[j] ? String(row[j]).replace(/[\s　]+/g, "") : "";
+        let variant = row[j] ? String(row[j]).replace(/[\s ]+/g, "") : "";
         if (variant) nameMap[variant] = canonical;
       }
     }
@@ -160,7 +161,7 @@ const NewWageEngine = (function() {
   function _normalizeLocForChecker(rawText, dict) {
     if (!rawText) return "";
     // 【内科】などの括弧書きや、スラッシュ以降の備考を削除し、空白を詰める
-    let cleanName = String(rawText).replace(/[【】\(（]?(内科|小児科)[\)）]?/g, "").replace(/\/.*/, "").replace(/[\s　]+/g, "");
+    let cleanName = String(rawText).replace(/[【】\(（]?(内科|小児科)[\)）]?/g, "").replace(/\/.*/, "").replace(/[\s ]+/g, "");
     return dict[cleanName] || cleanName;
   }
 
@@ -213,7 +214,7 @@ const NewWageEngine = (function() {
       let dayType = String(values[i][5]).trim();
       
       // ★ 修正：時間表記のゼロパディング（9:00 -> 09:00）によるブレ吸収
-      let rawTime = String(values[i][6]).replace(/[～〜]/g, "-").replace(/[\s　]+/g, "").trim();
+      let rawTime = String(values[i][6]).replace(/[～〜]/g, "-").replace(/[\s ]+/g, "").trim();
       let timeParts = rawTime.split('-');
       if (timeParts.length === 2) {
          const pad = (t) => {

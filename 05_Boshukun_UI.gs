@@ -35,6 +35,7 @@ function updateLocationListForUI(yearStr, term) {
 
 /**
  * (内部関数) 指定された年度・期に開院している拠点リストを取得
+ * ★ UI用の処理なので、画面フリーズ防止のためあえてリトライ機構(safeOpenByUrl)は使いません
  */
 function _getAvailableLocationsForUI(yearStr, term) {
   const allLocs = [];
@@ -43,7 +44,7 @@ function _getAvailableLocationsForUI(yearStr, term) {
   
   try {
     const masterUrl = 'https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit';
-    const ss = SpreadsheetApp.openByUrl(masterUrl);
+    const ss = SpreadsheetApp.openByUrl(masterUrl); // ← ここはそのまま維持
     const sheet = ss.getSheetByName('拠点名');
     if (sheet) {
       const data = sheet.getDataRange().getValues();
@@ -72,11 +73,14 @@ function _getAvailableLocationsForUI(yearStr, term) {
 
 /**
  * メイン処理から呼ばれる：選択されたエリアに該当する拠点を抽出
+ * ★ 裏側で動くバッチ処理の一部なので、リトライ機構(safeOpenByUrl)を使用します
  */
 function getTargetLocationsFromMaster(yearStr, term, targetAreas) {
   const masterUrl = 'https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit';
   let ss;
-  try { ss = SpreadsheetApp.openByUrl(masterUrl); } 
+  try { 
+    ss = safeOpenByUrl(masterUrl); // ★ ここを safeOpenByUrl に変更
+  } 
   catch(e) { throw new Error("拠点マスターシートへのアクセス権限がありません。"); }
   
   const sheet = ss.getSheetByName('拠点名');

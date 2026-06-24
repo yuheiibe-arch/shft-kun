@@ -91,7 +91,8 @@ function _buildLocMasterDict() {
   let areaMap = {};
   let openDateMap = {};
   try {
-    const ss = SpreadsheetApp.openByUrl('https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit');
+    // ★ここを safeOpenByUrl に変更
+    const ss = safeOpenByUrl('https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit');
     const data = ss.getSheetByName('拠点名').getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
       const n = String(data[i][0]).trim();

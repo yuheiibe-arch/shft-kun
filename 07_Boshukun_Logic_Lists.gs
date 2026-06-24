@@ -23,7 +23,8 @@ function _getAreaHelper(locName, map) {
 function _debug_getKyukanMap() {
   const map = {};
   try {
-    const kyuSs = SpreadsheetApp.openByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
+    // ★ここを safeOpenByUrl に変更
+    const kyuSs = safeOpenByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
     const kyuSheet = kyuSs.getSheetByName("休館日");
     if (kyuSheet) {
       const kyuData = kyuSheet.getDataRange().getValues();
@@ -558,7 +559,7 @@ function _debug_getCancelShiftsFromSheets(yearStr, locNames, rawBoshuData, shift
       
       // 医師名から全角・半角スペースを完全に除去
       let rawDocName = String(row[6]).trim() || String(row[5]).trim(); 
-      let docName = rawDocName.replace(/[\s　]+/g, "").replace(/先生$/, "").trim();
+      let docName = rawDocName.replace(/[\s ]+/g, "").replace(/先生$/, "").trim();
       const doctor = `${docName}先生`;
       
       const dateStrFormatted = Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy年MM月dd日");
@@ -612,7 +613,7 @@ function _debug_getCancelShiftsFromSheets(yearStr, locNames, rawBoshuData, shift
       shiftData[cleanLoc][dateStr].forEach(shift => {
         if (shift.doctorName && shift.doctorName !== "休" && shift.doctorName !== "募集") {
            // 休館日側でもスペース除去
-           let docName = shift.doctorName.replace(/[\s　]+/g, "").replace(/先生$/, "").trim();
+           let docName = shift.doctorName.replace(/[\s ]+/g, "").replace(/先生$/, "").trim();
            let doctor = `${docName}先生`;
            let dateStrFormatted = Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy年MM月dd日");
            let category = shift.rawShift.includes("内科") ? "内科" : "小児科";

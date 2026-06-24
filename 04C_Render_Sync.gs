@@ -2,6 +2,7 @@
  * ==========================================
  * 04C_Render_Sync.gs
  * 自動同期・条件付き書式の反映・onEditイベント
+ * ★プルダウン一括設定（API通信1回）究極対応版
  * ==========================================
  */
 
@@ -20,7 +21,6 @@ function onEdit(e) {
 
   const row = range.getRow();
   const col = range.getColumn();
-  
   if (col >= 4 && col <= 10) {
     const labels = sheet.getRange(row, 1, 1, 3).getValues()[0];
     const rowLabelA = String(labels[0]).trim();
@@ -45,13 +45,17 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
 
   const joukinColor = "#fce5cd"; 
   const teikiColor  = "#d9d2e9"; 
-  const senkouColor = "#d9ead3"; 
+  const senkouColor = "#d9ead3";
   const emptyColor  = "#ffffff"; 
 
-  // ★本当の一括処理：対象範囲の既存ルールを「面」としてまとめて取得
-  const fullDataRange = sheet.getRange(1, 4, maxRows, 12);
-  const existingRules = fullDataRange.getDataValidations();
   let alignRanges = [];
+  
+  // ====================================================================
+  // ★ 諸悪の根源（個別ループ通信）を撤廃し、2次元配列で一気に処理する
+  // ====================================================================
+  const targetRange = sheet.getRange(1, 4, maxRows, 12); // D列〜O列の全行を一気に取得
+  let currentRules = targetRange.getDataValidations();
+  let rulesModified = false;
 
   for (let r = 0; r < maxRows; r++) {
     let rowNum = r + 1;
@@ -59,44 +63,38 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
     let labelC = String(data[r][2]).trim(); 
     
     if (labelA === "常勤医師") {
-      let vals = new Array(7).fill(""); let bgs = new Array(7).fill(emptyColor);
+      let vals = new Array(7).fill("");
+      let bgs = new Array(7).fill(emptyColor);
       for (let i = 0; i < finalJ.length && i < 7; i++) { vals[i] = finalJ[i]; bgs[i] = joukinColor; }
       sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
     } 
     else if (labelA === "非常勤医師") {
-      let vals = new Array(7).fill(""); let bgs = new Array(7).fill(emptyColor);
+      let vals = new Array(7).fill("");
+      let bgs = new Array(7).fill(emptyColor);
       for (let i = 0; i < finalT.length && i < 7; i++) { vals[i] = finalT[i]; bgs[i] = teikiColor; }
       sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
     }
     
-    /* ========================================================================
-    ★修正箇所：先行応募（単発）の医師名を、関係のない別の月にまで上書きコピー
-    してしまうのを防ぐため、ここでの一括書き込み処理を無効化しています。
-    ※プルダウンリストへの追加や色分け設定は下の処理で引き続き行われます。
-    ========================================================================
-    else if (labelA === "先行応募" || labelA === "先行応募医師") {
-      let vals = new Array(7).fill(""); let bgs = new Array(7).fill(emptyColor);
-      for (let i = 0; i < finalS.length && i < 7; i++) { vals[i] = finalS[i]; bgs[i] = senkouColor; }
-      sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
-    }
-    */
-    
-    // 1診目、2診目の行のルールを、メモリ上でサクサク書き換える
     if (labelC === "1診目" || labelC === "2診目") {
-      for (let c = 0; c < 12; c++) {
-        existingRules[r][c] = newRule;
-      }
       alignRanges.push(`D${rowNum}:O${rowNum}`);
+      // 裏側（メモリ上）で配列にルールをセットする（通信は発生しない）
+      for (let c = 0; c < 12; c++) {
+        currentRules[r][c] = newRule;
+      }
+      rulesModified = true;
     }
   }
 
-  // ★書き換えたルールを一気にシートに貼り付ける（クラッシュしない唯一の方法）
-  fullDataRange.setDataValidations(existingRules);
+  // 左詰めの一括適用
   if (alignRanges.length > 0) {
     sheet.getRangeList(alignRanges).setHorizontalAlignment("left");
   }
+  
+  // ★ 最後に1回だけ、書き換えたルール配列をガバッと被せる（通信1回で終了！）
+  if (rulesModified) {
+    targetRange.setDataValidations(currentRules);
+  }
 
-  // ★ここで無事に「募集」を黄色にする処理が実行されます！
   updateSheetWideCF(sheet, finalJ, finalT, finalS);
 }
 
@@ -109,7 +107,7 @@ function syncSheetIndependent(sheet) {
   let senkouList = [];
 
   for (let r = 0; r < data.length; r++) {
-    let rowLabel = String(data[r][0]).trim(); 
+    let rowLabel = String(data[r][0]).trim();
     if (rowLabel === "常勤医師") {
       for (let c = 3; c <= 9; c++) {
         let name = String(data[r][c]).trim();
@@ -133,8 +131,7 @@ function syncSheetIndependent(sheet) {
 
 function updateSheetWideCF(sheet, joukinList, teikiList, senkouList) {
   let rules = [];
-  const maxRows = Math.max(sheet.getMaxRows(), 100);
-  const targetRange = sheet.getRange(1, 4, maxRows, 12); 
+  const targetRange = sheet.getRange("D:O"); 
 
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("募集").setBackground("#ffff00").setFontColor("#000000").setRanges([targetRange]).build());
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("休").setBackground("#cccccc").setFontColor("#cccccc").setRanges([targetRange]).build());
@@ -148,7 +145,7 @@ function updateSheetWideCF(sheet, joukinList, teikiList, senkouList) {
   teikiList.forEach(doc => {
     if(doc) rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(doc).setBackground("#d9d2e9").setFontColor("#000000").setRanges([targetRange]).build());
   });
-
+  
   if(senkouList) {
     senkouList.forEach(doc => {
       if(doc) rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(doc).setBackground("#d9ead3").setFontColor("#000000").setRanges([targetRange]).build());

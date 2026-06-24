@@ -62,7 +62,8 @@ function getAreaMapping() {
 
   let map = {};
   try {
-    const ss = SpreadsheetApp.openByUrl("https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit");
+    // ★ここを safeOpenByUrl に変更
+    const ss = safeOpenByUrl("https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit");
     const data = ss.getSheetByName("拠点名").getDataRange().getValues();
     const headers = data[0];
     const grpIdx = headers.indexOf("拠点グループ");

@@ -222,7 +222,8 @@ function _readFlatSheet(ss, sheetName, isAbsence) {
 function _readKyukanFlat() {
   const map = [];
   try {
-    const kyuSs = SpreadsheetApp.openByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
+    // ★ここを safeOpenByUrl に変更
+    const kyuSs = safeOpenByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
     const kyuSheet = kyuSs.getSheetByName("休館日");
     if (kyuSheet) {
       const data = kyuSheet.getDataRange().getValues();

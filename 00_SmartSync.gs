@@ -77,13 +77,15 @@ function getMasterRawData(year) {
   });
 
   try {
-    const kyuSs = SpreadsheetApp.openByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
+    // ★ここを safeOpenByUrl に変更（休館日マスタ）
+    const kyuSs = safeOpenByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
     const kyuSheet = kyuSs.getSheetByName("休館日");
     if (kyuSheet) cache['休館日'] = kyuSheet.getDataRange().getValues();
   } catch(e) {}
 
   try {
-    const masterSs = SpreadsheetApp.openByUrl('https://docs.google.com/spreadsheets/d/1aEjphEv_63SeWQmwiOy9sx7IrMfawU01sHbKd_Ki4iA/edit');
+    // ★ここを safeOpenByUrl に変更（医師契約マスタ）
+    const masterSs = safeOpenByUrl('https://docs.google.com/spreadsheets/d/1aEjphEv_63SeWQmwiOy9sx7IrMfawU01sHbKd_Ki4iA/edit');
     ['常勤', '定期非常勤'].forEach(type => {
       let sheet = masterSs.getSheetByName(`${type}${year}年度`);
       if (sheet) cache[type] = sheet.getDataRange().getValues();

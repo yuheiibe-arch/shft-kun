@@ -24,7 +24,8 @@ const CONFIG = {
  */
 function getExternalSpreadsheet() {
   try {
-    return SpreadsheetApp.openByUrl(CONFIG.EXTERNAL_URL);
+    // ★ここを safeOpenByUrl に変更
+    return safeOpenByUrl(CONFIG.EXTERNAL_URL);
   } catch (e) {
     throw new Error("外部シートの読み込みに失敗しました。URLとアクセス権限を確認してください。");
   }
@@ -71,7 +72,8 @@ function getValidWageSheetName(yearMonthStr) {
   const targetSuffix = isSecondHalf ? "（下期）" : "（上期）";
   let expectedSheetName = fiscalYear + "年度" + targetSuffix;
   
-  const wageSs = SpreadsheetApp.openByUrl(CONFIG.WAGE_URL);
+  // ★ここを safeOpenByUrl に変更
+  const wageSs = safeOpenByUrl(CONFIG.WAGE_URL);
   let sheet = wageSs.getSheetByName(expectedSheetName);
   
   // 下期の対象月だが、まだ下期のシートが作られていない場合は「上期」にフォールバック
@@ -92,7 +94,8 @@ function getValidWageSheetName(yearMonthStr) {
  * 外部の正規表現シートから表記ブレ辞書を動的に取得する
  */
 function getLocationDictionary() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.MAP_URL);
+  // ★ここを safeOpenByUrl に変更
+  const ss = safeOpenByUrl(CONFIG.MAP_URL);
   const sheet = ss.getSheetByName(CONFIG.MAP_SHEET_NAME);
   const data = sheet.getDataRange().getValues();
   let map = {};
@@ -104,7 +107,7 @@ function getLocationDictionary() {
     // B列〜E列の表記ブレを正規名に紐付ける
     for (let j = 1; j <= 4; j++) {
       let variant = row[j] ? row[j].toString() : "";
-      variant = variant.replace(/[\s　]+/g, ""); // 全角半角スペースを除去
+      variant = variant.replace(/[\s ]+/g, ""); // 全角半角スペースを除去
       if (variant) map[variant] = canonical;
     }
   });
@@ -117,7 +120,8 @@ function getLocationDictionary() {
  * 空欄の場合は「未定(null)」として扱う
  */
 function getLocationOpenDates() {
-  const ss = SpreadsheetApp.openByUrl(CONFIG.MAP_URL);
+  // ★ここを safeOpenByUrl に変更
+  const ss = safeOpenByUrl(CONFIG.MAP_URL);
   const sheet = ss.getSheetByName(CONFIG.MAP_SHEET_NAME);
   const data = sheet.getDataRange().getValues();
   let openDates = {};
@@ -163,7 +167,7 @@ function getLocationOpenDates() {
 function normalizeLocationName(rawText, dict) {
   const map = dict || getLocationDictionary();
   let cleanName = rawText.replace(/[\(（]?(内科|小児科)[\)）]?/g, "").replace(/\/.*/, "");
-  cleanName = cleanName.replace(/[\s　]+/g, "");
+  cleanName = cleanName.replace(/[\s ]+/g, "");
   return map[cleanName] || cleanName;
 }
 
@@ -186,7 +190,8 @@ let _locationMasterMap = null;
 function initializeWageData() {
   if (_wageMasterMap2025 && _wageData2026 && _locationMasterMap) return;
 
-  const masterSs = SpreadsheetApp.openByUrl(WAGE_CONFIG.MASTER_URL);
+  // ★ここを safeOpenByUrl に変更
+  const masterSs = safeOpenByUrl(WAGE_CONFIG.MASTER_URL);
   
   _locationMasterMap = getLocationDictionary(); 
 

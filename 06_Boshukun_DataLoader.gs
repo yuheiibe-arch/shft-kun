@@ -88,7 +88,8 @@ function _loadBoshukunData(ctx) {
   const masterUrl = 'https://docs.google.com/spreadsheets/d/1aEjphEv_63SeWQmwiOy9sx7IrMfawU01sHbKd_Ki4iA/edit';
   let masterSs;
   try { 
-    masterSs = SpreadsheetApp.openByUrl(masterUrl); 
+    // ★ここを safeOpenByUrl に変更
+    masterSs = safeOpenByUrl(masterUrl); 
   } catch (e) { 
     throw new Error("マスタへのアクセス権限がありません"); 
   }

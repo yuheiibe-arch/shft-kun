@@ -2,6 +2,7 @@
  * ==========================================
  * 04B_Render_Calc.gs
  * コスト計算・ダッシュボード書き込み・統計初期化
+ * ★マスタ不在時の無限フリーズ・安全防衛版
  * ==========================================
  */
 
@@ -15,14 +16,37 @@ function calculateDailyCost(shift, isHoliday, wageDataList) {
   let prefix = isHoliday ? "hol" : "wd";
   let useYear = (shift.specialWageDetail && shift.specialWageDetail.includes("2025年度")) ? "y2025" : "y2026";
   
+  // ====================================================================
+  // ★ 安全防衛策1：そもそも時給マスタデータが空、または壊れている場合の完全ガード
+  // ====================================================================
+  if (!wageDataList || wageDataList.length === 0 || !wageDataList[0]) {
+    console.warn(`[⚠️時給エラー] マスタデータ全体が空です。医師: ${shift.doctorName} (拠点: ${shift.rawShift || "不明"}) の計算をスキップします。`);
+    return { hours: 0, cost: 0, appliedRates: [] };
+  }
+  
   let targetDept = wageDataList[0]; 
   if (wageDataList.length > 1) {
     if (shift.rawShift.includes("内科")) targetDept = wageDataList.find(w => w.department === "内科") || targetDept;
     else if (shift.rawShift.includes("小児科")) targetDept = wageDataList.find(w => w.department === "小児科") || targetDept;
   }
   
+  // ====================================================================
+  // ★ 安全防衛策2：該当する診療科のオブジェクト（または内部のrates属性）が存在しない場合のガード
+  // ====================================================================
+  if (!targetDept || !targetDept.rates) {
+    console.warn(`[⚠️時給エラー] 診療科マスタの構造が不正です。医師: ${shift.doctorName}`);
+    return { hours: 0, cost: 0, appliedRates: [] };
+  }
+  
   let rates = targetDept.rates[useYear] || targetDept.rates["y2026"];
-  if (!rates) return { hours: 0, cost: 0, appliedRates: [] };
+  
+  // ====================================================================
+  // ★ 安全防衛策3：時給（rates）が undefined になった場合のフリーズガード
+  // ====================================================================
+  if (!rates) {
+    console.warn(`[⚠️時給設定なし] 医師: ${shift.doctorName} 先生の時給データ(rates)がありません。時給0円として計算を安全に続行します。`);
+    return { hours: 0, cost: 0, appliedRates: [] };
+  }
 
   for (let h = sHour; h < eHour; h++) {
     if (h === 13 || h === 14) continue; 
@@ -96,7 +120,7 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   const emptyColor  = "#ffffff"; 
 
   let docBgUpdates = []; 
-  let alignUpdates = []; // ★左詰め更新用リスト
+  let alignUpdates = []; 
 
   for (let r = 0; r < values.length; r++) {
     for (let c = 0; c < values[r].length; c++) {
@@ -178,7 +202,6 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
             values[r + 1 + idx][c + 1] = d.hours;
             values[r + 1 + idx][c + 2] = contractDetails;
             values[r + 1 + idx][c + 3] = rateStr;
-            // ★金額を見やすくカンマ付きにする
             values[r + 1 + idx][c + 4] = d.cost.toLocaleString();
           }
           
@@ -186,7 +209,6 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
           idx++;
         }
         
-        // ★左詰め処理のリストに追加（出力行数分、横5列）
         if (idx > 0) {
           alignUpdates.push({ row: startRow + r + 1, col: c + 1, numRows: idx, numCols: 5 });
         }
@@ -209,7 +231,6 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
      sheet.getRange(update.row, 4, 1, 7).setBackgrounds(update.bgs);
   });
   
-  // ★追加：医師のコストリストをすべて左詰めにする
   alignUpdates.forEach(update => {
      sheet.getRange(update.row, update.col, update.numRows, update.numCols).setHorizontalAlignment("left");
   });
