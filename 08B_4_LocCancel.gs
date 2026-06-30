@@ -7,7 +7,6 @@
 
 function _processLocCancel(ctx, locCtx) {
   let { cleanLocName, category, displayLoc, area, actualStartDate, locCalendar, activeContracts, locDicts } = locCtx;
-
   let locAbsences = [];
   Object.values(locDicts.absences).forEach(arr => locAbsences.push(...arr));
   
@@ -34,7 +33,8 @@ function _processLocCancel(ctx, locCtx) {
       });
       
       if (cleanLocName !== "MQC") {
-        _splitTimeIntoBlocks(blk.sH, blk.eH).forEach(b => {
+        // ★ 修正：分割ルールに cleanLocName を渡して拠点情報を引き継ぐ
+        _splitTimeIntoBlocks(blk.sH, blk.eH, cleanLocName).forEach(b => {
            const sig = `${cleanLocName}_${Utilities.formatDate(a.dateObj, "JST", "yyyy/MM/dd")}_${b.sH}_${b.eH}`;
            if (!ctx.pushedSingles.has(sig)) {
              ctx.tempSingles.push({ area: area, loc: displayLoc, cleanLoc: cleanLocName, cat: category, reason: "欠勤等による追加募集", dateObj: a.dateObj, dow: ctx.dowNames[a.dateObj.getDay()], sH: b.sH, eH: b.eH });
@@ -65,7 +65,8 @@ function _processLocCancel(ctx, locCtx) {
       if (cDay.isHol && _isContractActiveOnCache(c, cDay)) {
         let isWork = cDay.isNY ? c.isNewYearWork : c.isHolidayWork;
         if (!isWork && cleanLocName !== "MQC") { 
-          _splitTimeIntoBlocks(c.sH, c.eH).forEach(b => {
+          // ★ 修正：分割ルールに cleanLocName を渡して拠点情報を引き継ぐ
+          _splitTimeIntoBlocks(c.sH, c.eH, cleanLocName).forEach(b => {
             const sig = `${cleanLocName}_${cDay.dStr}_${b.sH}_${b.eH}`;
             if (!ctx.pushedSingles.has(sig)) {
               ctx.tempSingles.push({ area: area, loc: displayLoc, cleanLoc: cleanLocName, cat: category, reason: "祝日・年末年始", dateObj: new Date(cDay.getTime), dow: cDay.dN, sH: b.sH, eH: b.eH });
@@ -86,7 +87,8 @@ function _processLocCancel(ctx, locCtx) {
         if (c.validTo && cDay.getTime > c.validTo.getTime()) isOut = true;
 
         if (isOut && cleanLocName !== "MQC") {
-           _splitTimeIntoBlocks(c.sH, c.eH).forEach(b => {
+           // ★ 修正：分割ルールに cleanLocName を渡して拠点情報を引き継ぐ
+           _splitTimeIntoBlocks(c.sH, c.eH, cleanLocName).forEach(b => {
               let isCovered = activeContracts.some(otherC => {
                  if (_isContractActiveOnCache(otherC, cDay)) {
                     if (otherC.sH <= b.sH && otherC.eH >= b.eH) return true;

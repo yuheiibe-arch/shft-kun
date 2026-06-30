@@ -1,4 +1,3 @@
-
 /**
  * ====================================================================
  * 08B_2_LocBoshu.gs
@@ -8,7 +7,6 @@
 
 function _processLocBoshu(ctx, locCtx) {
   let { cleanLocName, category, displayLoc, area, actualStartDate, activeContracts, locDicts } = locCtx;
-
   if (cleanLocName === "MQC") return;
 
   let weeklyGrid = {};
@@ -18,7 +16,6 @@ function _processLocBoshu(ctx, locCtx) {
     weeklyGrid[dow][5].clear(); 
     if (cleanLocName === "北葛西") weeklyGrid[dow][11].clear();
   });
-
   activeContracts.forEach(c => {
     for (let h = c.sH; h < c.eH; h++) {
       let idx = h - 9;
@@ -27,10 +24,13 @@ function _processLocBoshu(ctx, locCtx) {
       }
     }
   });
-
   ctx.dowNames.forEach(dow => {
     _extractWeeklyBlocks(weeklyGrid[dow]).forEach(b => {
       const wage = _getWageWrapper(ctx.startDStr, cleanLocName, category, dow, b.sH, b.eH);
+      
+      // ★ 追加：時給が空欄（ID未設定や時給表にない等）の場合は、募集枠として出力しない
+      if (!wage || wage === "") return;
+
       const dailyCost = _getDailyCost(ctx.startDStr, cleanLocName, category, dow, b.sH, b.eH);
       
       const pushBoshuChunk = (sDate, eDate, tSuffix) => {
@@ -47,11 +47,9 @@ function _processLocBoshu(ctx, locCtx) {
         ctx.calendarCache.filter(c => c.getTime >= chunkStart.getTime() && c.getTime <= eDate.getTime()).forEach(cDay => {
           if (cDay.dN === dow && b.weeksArr.includes(cDay.wNum)) {
             targetDaysCount++;
-            let isCoveredToday = false; 
-            
+            let isCoveredToday = false;
             if (cDay.isHol) holArr.push(`${cDay.dateObj.getMonth() + 1}/${cDay.dateObj.getDate()}(${dow})`);
             
-            // 重いfilterループを、生成済みの辞書参照に置き換え（ロジックは完全同一）
             let advs = (locDicts.advances[cDay.dStr] || []).filter(adv => adv.sH < b.eH && adv.eH > b.sH);
             advs.forEach(adv => {
               isCoveredToday = true; 
@@ -61,7 +59,6 @@ function _processLocBoshu(ctx, locCtx) {
                 irregArr.push(`${adv.docName}先生|||先行|||（期間内の祝日）|||${cDay.dateObj.getMonth() + 1}/${cDay.dateObj.getDate()}(${dow})`);
               }
             });
-
             let subs = (locDicts.substitutes[cDay.dStr] || []).filter(sub => sub.sH < b.eH && sub.eH > b.sH);
             subs.forEach(sub => {
               isCoveredToday = true; 
@@ -71,23 +68,21 @@ function _processLocBoshu(ctx, locCtx) {
                 irregArr.push(`${sub.docName}先生|||振替|||（期間内の祝日）|||${cDay.dateObj.getMonth() + 1}/${cDay.dateObj.getDate()}(${dow})`);
               }
             });
-
             if (isCoveredToday) {
-              coveredDaysCount++; 
+              coveredDaysCount++;
             } else {
               emptyDays.push(cDay);
             }
           }
         });
-        
         if (targetDaysCount === 0 || targetDaysCount === coveredDaysCount) {
-          return; 
+          return;
         }
 
         let coveredRate = coveredDaysCount / targetDaysCount;
         if (coveredRate >= 0.8) {
           emptyDays.forEach(cDay => {
-            _splitTimeIntoBlocks(b.sH, b.eH).forEach(blk => {
+            _splitTimeIntoBlocks(b.sH, b.eH, cleanLocName).forEach(blk => {
               const sig = `${cleanLocName}_${cDay.dStr}_${blk.sH}_${blk.eH}`;
               if (!ctx.pushedSingles.has(sig)) {
                 ctx.tempSingles.push({ 
@@ -105,8 +100,8 @@ function _processLocBoshu(ctx, locCtx) {
         const totalHours = b.hours * targetDaysCount;
         let holidaysStr = (dow !== "土" && dow !== "日" && holArr.length > 0) ? holArr.join(",") : "";
         let holWage = (holidaysStr !== "") ? _getHolidayWageWrapper(ctx.startDStr, cleanLocName, category, b.sH, b.eH) : "";
-        let irregStr = irregArr.length > 0 ? irregArr.join("###") : ""; 
-
+        let irregStr = irregArr.length > 0 ? irregArr.join("###") : "";
+        
         ctx.masterRegularList.push({
           "エリア": area, "期間": pStr, "開始時間": b.sT, "終了時間": b.eT, 
           "時給": wage, "祝日時給": holWage, "祝日該当日": holidaysStr, 
@@ -120,10 +115,13 @@ function _processLocBoshu(ctx, locCtx) {
           let extra_sH = 17;
           let extra_eH = 20;
           let extra_wage = _getWageWrapper(ctx.startDStr, cleanLocName, category, dow, extra_sH, extra_eH);
+          
+          // ★ 北葛西の特例枠も時給がなければ出力しない
+          if (!extra_wage || extra_wage === "") return;
+          
           let extra_dailyCost = _getDailyCost(ctx.startDStr, cleanLocName, category, dow, extra_sH, extra_eH);
           let extra_holWage = (holidaysStr !== "") ? _getHolidayWageWrapper(ctx.startDStr, cleanLocName, category, extra_sH, extra_eH) : "";
           let extra_totalHours = 3 * targetDaysCount;
-          
           ctx.masterRegularList.push({
             "エリア": area, "期間": pStr, "開始時間": "17:00", "終了時間": "20:00", 
             "時給": extra_wage, "祝日時給": extra_holWage, "祝日該当日": holidaysStr, 

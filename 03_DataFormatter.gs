@@ -2,6 +2,7 @@
  * ====================================================================
  * 03_DataFormatter.gs
  * データの文字整形、時間のブロック化、辞書の生成など
+ * ★北葛西の夜間20時終了に完全対応版
  * ====================================================================
  */
 
@@ -22,7 +23,6 @@ function _processIrregularShifts(irregData, typeName) {
     if (!groups[key]) groups[key] = [];
     groups[key].push(d);
   });
-
   let results = { bundled: [], singles: [] };
   for (let key in groups) {
     let grp = groups[key];
@@ -36,22 +36,14 @@ function _processIrregularShifts(irregData, typeName) {
     let cur = new Date(firstDate);
     while(cur <= lastDate) { 
       totalDowCount++; 
-      cur.setDate(cur.getDate() + 7); 
+      cur.setDate(cur.getDate() + 7);
     }
     const attendanceRate = grp.length / totalDowCount;
-
     if (daysDiff >= 28 && attendanceRate >= 0.8) {
       results.bundled.push({
-        grp: grp, 
-        docName: grp[0].docName, 
-        sH: grp[0].sH, 
-        eH: grp[0].eH,
-        dow: GLOBAL_DOW_NAMES[firstDate.getDay()], 
-        firstDate: firstDate, 
-        lastDate: lastDate, 
-        typeName: typeName,
-        isDaishin: grp[0].isDaishin,
-        requester: grp[0].requester 
+        grp: grp, docName: grp[0].docName, sH: grp[0].sH, eH: grp[0].eH,
+        dow: GLOBAL_DOW_NAMES[firstDate.getDay()], firstDate: firstDate, lastDate: lastDate, typeName: typeName,
+        isDaishin: grp[0].isDaishin, requester: grp[0].requester 
       });
     } else {
       grp.forEach(d => results.singles.push(d));
@@ -83,7 +75,6 @@ function _extractContractInfo(bikou, targetLoc) {
   if (periodStr) result.push(periodStr);
   result = result.concat(locLines);
   if (holidayStr) result.push(holidayStr);
-  
   return result.join('\n');
 }
 
@@ -91,7 +82,6 @@ function _buildLocMasterDict() {
   let areaMap = {};
   let openDateMap = {};
   try {
-    // ★ここを safeOpenByUrl に変更
     const ss = safeOpenByUrl('https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit');
     const data = ss.getSheetByName('拠点名').getDataRange().getValues();
     for (let i = 1; i < data.length; i++) {
@@ -110,10 +100,10 @@ function _buildLocMasterDict() {
       let d = data[i][7];
       d = (!d || String(d).trim() === "") ? new Date(2099, 11, 31) : (d instanceof Date ? d : new Date(d));
       if (!isNaN(d.getTime())) { 
-        openDateMap[n] = d; 
+        openDateMap[n] = d;
         for(let j = 1; j <= 4; j++) {
           if(String(data[i][j]).trim()) {
-            openDateMap[String(data[i][j]).trim()] = d; 
+            openDateMap[String(data[i][j]).trim()] = d;
           }
         }
       }
@@ -135,7 +125,7 @@ function _getOpenDateHelperMaster(loc, map) {
 
 function _getAreaHelper(loc, map) {
   if (!loc) return "その他";
-  if (["欠勤", "有給", "休館日"].includes(loc)) return loc; 
+  if (["欠勤", "有給", "休館日"].includes(loc)) return loc;
   if (map[loc]) return map[loc];
   let c = loc.replace(/[（\(\)）]/g, "").replace(/内科|小児科/g, "").trim();
   for (let k in map) {
@@ -144,7 +134,10 @@ function _getAreaHelper(loc, map) {
   return "その他";
 }
 
-function _splitTimeIntoBlocks(sH, eH) {
+// ====================================================================
+// ★ 修正箇所：拠点名を受け取り、北葛西なら夜間を20時までに制限する
+// ====================================================================
+function _splitTimeIntoBlocks(sH, eH, locName = "") {
   let chunks = [];
   if (sH === 17) {
     chunks.push({sH: 17, eH: eH});
@@ -152,17 +145,20 @@ function _splitTimeIntoBlocks(sH, eH) {
   }
   if (sH < 13 && eH > 9) chunks.push({sH: 9, eH: 13});
   if (sH < 18 && eH > 15) chunks.push({sH: 15, eH: 18});
-  if (sH < 22 && eH > 18) chunks.push({sH: 18, eH: 21});
+  
+  let nightEnd = 21;
+  if (locName && locName.includes("北葛西")) nightEnd = 20;
+
+  if (sH < 22 && eH > 18) chunks.push({sH: 18, eH: nightEnd});
   return chunks;
 }
 
 function _extractWeeklyBlocks(arr) {
   let blocks = [];
   let cur = null;
-  let is17Start = false; 
-  
+  let is17Start = false;
   const tz = (i) => {
-    if (is17Start && i >= 8) return "PM_NT_MERGED"; 
+    if (is17Start && i >= 8) return "PM_NT_MERGED";
     return i < 4 ? "AM" : i < 6 ? "R" : i < 9 ? "PM" : "NT";
   };
   
@@ -176,18 +172,18 @@ function _extractWeeklyBlocks(arr) {
 
     if (val) {
       if (!cur) {
-        is17Start = (i === 8); 
+        is17Start = (i === 8);
         cur = { s: i, e: i, tz: tz(i), freq: val, weeksArr: Array.from(setObj).sort() };
       } else if (cur.tz !== tz(i) || cur.freq !== val) { 
-        blocks.push(cur); 
+        blocks.push(cur);
         is17Start = (i === 8); 
-        cur = { s: i, e: i, tz: tz(i), freq: val, weeksArr: Array.from(setObj).sort() }; 
+        cur = { s: i, e: i, tz: tz(i), freq: val, weeksArr: Array.from(setObj).sort() };
       } else {
         cur.e = i;
       }
     } else if (cur) { 
       blocks.push(cur); 
-      cur = null; 
+      cur = null;
       is17Start = false;
     }
   }
@@ -197,10 +193,6 @@ function _extractWeeklyBlocks(arr) {
     hours: b.e - b.s + 1, freqStr: b.freq, weeksArr: b.weeksArr 
   }));
 }
-
-// =========================================================
-// マージ関数
-// =========================================================
 
 function _mergeConfirmList(list) {
   if (!list || list.length === 0) return [];
@@ -224,7 +216,6 @@ function _mergeMasterRegularList(list) {
     if (!grouped[key]) grouped[key] = [];
     grouped[key].push(item);
   });
-
   let mergedList = [];
   
   for (let key in grouped) {
@@ -233,20 +224,14 @@ function _mergeMasterRegularList(list) {
 
     let base = items[0];
     let cleanItem = {};
-
     cleanItem["エリア"] = base["エリア"] || "";
 
-    // ★修正箇所：「毎週」の場合は曜日のみ、それ以外（「第2・4」など）は残す
     let uniqueDows = [...new Set(items.map(i => i._dow))];
     let dowStrForTitle = "";
     if (items.length === 1) {
-      if (base._freqStr === "毎週") {
-        dowStrForTitle = uniqueDows[0]; // 例: "日"
-      } else {
-        dowStrForTitle = `${base._freqStr}(${uniqueDows[0]})`; // 例: "第2・4(日)"
-      }
+      if (base._freqStr === "毎週") dowStrForTitle = uniqueDows[0];
+      else dowStrForTitle = `${base._freqStr}(${uniqueDows[0]})`;
     } else {
-      // 複数曜日の場合
       dowStrForTitle = uniqueDows.join('');
     }
 
@@ -259,12 +244,10 @@ function _mergeMasterRegularList(list) {
     cleanItem["期間"] = base["期間"] || "";
     cleanItem["開始時間"] = base["開始時間"] || "";
     cleanItem["終了時間"] = base["終了時間"] || "";
-
-    // 繰り返し曜日
+    
     let uniqueFreqDows = [...new Set(items.map(i => `${i._freqStr}${i._dow}曜日`))];
     cleanItem["繰り返し曜日"] = uniqueFreqDows.join('\n');
-
-    // 時給
+    
     let wages = items.map(i => i["時給"]);
     let allSameWage = wages.every(w => w === wages[0]);
     if (allSameWage) {
@@ -275,11 +258,9 @@ function _mergeMasterRegularList(list) {
       cleanItem["時給"] = Object.keys(wageByDow).map(d => `${d}曜:\n${wageByDow[d]}`).join('\n\n');
     }
 
-    // 祝日時給
     let hWages = [...new Set(items.map(i => i["祝日時給"]).filter(w => w))];
     cleanItem["祝日時給"] = hWages.join('\n');
 
-    // 祝日該当日
     let allHols = [];
     items.forEach(i => {
        if (i["祝日該当日"]) {
@@ -292,11 +273,9 @@ function _mergeMasterRegularList(list) {
     });
     cleanItem["祝日該当日"] = [...new Set(allHols)].join('\n');
 
-    // 募集時間とコストの合算
     cleanItem["募集時間"] = items.reduce((sum, i) => sum + (Number(i["募集時間"]) || 0), 0) || "";
     cleanItem["コスト"] = items.reduce((sum, i) => sum + (Number(i["コスト"]) || 0), 0) || "";
-
-    // 先行・振替の改行フォーマット
+    
     let irregGroups = {};
     items.forEach(i => {
         let rawIrreg = i["先行・振替"];
@@ -337,7 +316,6 @@ function _mergeMasterRegularList(list) {
      let dowB = dowOrder[b._dowArr[0]] || 99;
      return dowA - dowB;
   });
-
   return mergedList.map(item => {
      delete item._loc;
      delete item._sH;

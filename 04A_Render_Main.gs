@@ -158,9 +158,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
           }
         }
       }
-      if (targetTerm === "下期" && startRow === 0) {
-        startRow = lastRow + 4;
-      }
     }
     
     let isNewBlock = false;
@@ -222,7 +219,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
 
     groupedDays.forEach(dayInfo => {
       
-      // ★ 削除：ここで毎回通信(setValue)していた処理を消し、代わりに dateValues 配列にストックする
       if (!dayInfo.isValid) {
         dateValues.push(["", ""]); // 1行目
         dateValues.push(["", ""]); // 2行目
@@ -238,7 +234,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
         return; 
       }
       
-      // ★ 追加：曜日と週番号を配列にストック
       dateValues.push([dayInfo.dayOfWeek, dayInfo.weekNum]); // 1診目の行にセット
       dateValues.push(["", ""]);                             // 2診目の行は空白
       

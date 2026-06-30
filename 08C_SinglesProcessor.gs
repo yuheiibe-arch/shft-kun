@@ -12,14 +12,13 @@ function _processGroupedSingles(ctx) {
     if (!groupedSingles[key]) groupedSingles[key] = [];
     groupedSingles[key].push(s);
   });
-
   for (const key in groupedSingles) {
     const grp = groupedSingles[key];
     grp.sort((a,b) => a.dateObj - b.dateObj);
     const first = grp[0];
     const last = grp[grp.length - 1];
-    
-    let repeatDow = grp.length >= 3 && grp.every(g => g.dow === first.dow) ? `毎週${first.dow}曜日` : (grp.length > 1 ? "複数日程" : "単独");
+    let repeatDow = grp.length >= 3 && grp.every(g => g.dow === first.dow) ?
+      `毎週${first.dow}曜日` : (grp.length > 1 ? "複数日程" : "単独");
     
     let monthMap = {};
     grp.forEach(g => {
@@ -35,23 +34,23 @@ function _processGroupedSingles(ctx) {
     const datesStr = datesStrArr.join('\n');
     
     const wage = _getWageWrapper(Utilities.formatDate(first.dateObj, "JST", "yyyy/MM/dd"), first.cleanLoc, first.cat, first.dow, first.sH, first.eH);
-    // ★ 追加：単独募集のコストも専用関数で正確に算出
+    
+    // ★ 追加：時給が空欄（ID未設定など）の場合は、単独募集枠に出力しない
+    if (!wage || wage === "") continue;
+    
     const dailyCost = _getDailyCost(Utilities.formatDate(first.dateObj, "JST", "yyyy/MM/dd"), first.cleanLoc, first.cat, first.dow, first.sH, first.eH);
     const hours = (first.eH - first.sH) * grp.length;
 
-    // ★ 変更：「8割以上埋まり」で飛んできた場合は、必ず単独募集（下のelse）に送るための条件を追加
     if (first.reason !== "定期枠（8割以上埋まり）の残り分募集" && first.reason === "契約期間外による追加募集" && repeatDow.includes("毎週")) {
       let m1 = first.dateObj.getMonth() + 1;
       let m2 = last.dateObj.getMonth() + 1;
       let tSuffix = (m1 === m2) ? `${m1}` : `${m1}~${m2}`;
-      
       let pStart = new Date(first.dateObj.getFullYear(), first.dateObj.getMonth(), 1);
       let pEnd = new Date(last.dateObj.getFullYear(), last.dateObj.getMonth() + 1, 0);
       let roundedPeriod = `${Utilities.formatDate(pStart, "JST", "yyyy/MM/dd")}～${Utilities.formatDate(pEnd, "JST", "yyyy/MM/dd")}`;
       
       let holArr = [];
-      let irregArr = []; 
-      
+      let irregArr = [];
       grp.forEach(g => {
           let cDay = ctx.calendarCache.find(c => c.getTime === g.dateObj.getTime());
           if (cDay && cDay.isHol) holArr.push(`${cDay.dateObj.getMonth() + 1}/${cDay.dateObj.getDate()}(${g.dow})`);
@@ -84,27 +83,26 @@ function _processGroupedSingles(ctx) {
       });
       let holidaysStr = (first.dow !== "土" && first.dow !== "日" && holArr.length > 0) ? holArr.join(",") : "";
       let holWage = (holidaysStr !== "") ? _getHolidayWageWrapper(Utilities.formatDate(first.dateObj, "JST", "yyyy/MM/dd"), first.cleanLoc, first.cat, first.sH, first.eH) : "";
-      
       let irregStr = irregArr.length > 0 ? irregArr.join("###") : "";
-
       ctx.masterRegularList.push({
         "エリア": first.area, "期間": roundedPeriod, 
         "開始時間": `${('0'+first.sH).slice(-2)}:00`, "終了時間": `${('0'+first.eH).slice(-2)}:00`, 
         "時給": wage, "祝日時給": holWage, "祝日該当日": holidaysStr, 
         "募集時間": hours, 
-        "コスト": dailyCost > 0 ? dailyCost * grp.length : "", // ★ 変更：日割りコスト × 日数で計算
+        "コスト": dailyCost > 0 ? dailyCost * grp.length : "",
         "対応済": false, "先行・振替": irregStr,
         _loc: first.loc, _sH: first.sH, _eH: first.eH, _freqStr: "毎週", _dow: first.dow, _tSuffix: tSuffix
       });
     } else {
-      const period = grp.length > 1 ? `${Utilities.formatDate(first.dateObj, "JST", "MM/dd")}～${Utilities.formatDate(last.dateObj, "JST", "MM/dd")}` : `${Utilities.formatDate(first.dateObj, "JST", "MM/dd")}（${first.dow}）`;
+      const period = grp.length > 1 ?
+        `${Utilities.formatDate(first.dateObj, "JST", "MM/dd")}～${Utilities.formatDate(last.dateObj, "JST", "MM/dd")}` : `${Utilities.formatDate(first.dateObj, "JST", "MM/dd")}（${first.dow}）`;
       
       ctx.singleList.push({
         "エリア": first.area, "拠点名": first.loc, "理由": first.reason, "期間": period, 
         "開始時間": `${('0'+first.sH).slice(-2)}:00`, "終了時間": `${('0'+first.eH).slice(-2)}:00`, 
         "繰り返し曜日": repeatDow, "該当日": datesStr, "時給": wage, 
         "募集時間": hours, 
-        "コスト": dailyCost > 0 ? dailyCost * grp.length : "", // ★ 変更：日割りコスト × 日数で計算
+        "コスト": dailyCost > 0 ? dailyCost * grp.length : "", 
         "対応済": false, "注意": ""
       });
     }

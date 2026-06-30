@@ -2,13 +2,7 @@
  * ====================================================================
  * 03_WageEngine.gs
  * 【汎用モジュール】外部スクリプトから呼び出すための時給計算コアエンジン
- * * 💡【改善と教訓の歴史】
- * 1. コンフリクト回避: GASの仕様上、古いファイルの亡霊と衝突しないよう「NewWageEngine」と命名。
- * 2. 祝日判定の外部化: エンジン内部でカレンダーは読まず、呼び出し元から isHol (boolean) を受け取る設計に。
- * 3. ゼロ埋めフォーマット: 日付の表記揺れ（5/4 vs 05/04）による祝日判定ミスを防ぐため、
- * 呼び出し元で "yyyy/MM/dd" に整形してから isHol を渡す運用を徹底。
- * 4. フェイルセーフ: マスタ未定義等は問答無用で throw Error し、呼び出し元の try-catch でハンドリングさせる。
- * 5. 究極ロジック搭載: 契約テキストを読み込み、土曜日の平日枠判定・2025年度時給比較を自動化。
+ * ★ 拠点ID（番号）未設定時は処理をスキップする安全対応版
  * ====================================================================
  */
 
@@ -29,9 +23,7 @@ const NewWageEngine = (function() {
   function _init() {
     if (_isInitialized) return;
     try {
-      // ★ここを safeOpenByUrl に変更
       const wageMasterSs = safeOpenByUrl(CONFIG.WAGE_MASTER_URL);
-
       _locDicts = _buildLocationDictionary(wageMasterSs);
       _baseWageDB = _buildBaseWageDB(wageMasterSs, _locDicts.nameMap);
       _specialWageDB = _buildSpecialWageDB(wageMasterSs);
@@ -44,16 +36,6 @@ const NewWageEngine = (function() {
 
   /**
    * 【メインAPI】各コマの時給を算出する
-   * @param {string} medId - 医籍番号 (募集の場合は "BOSHU" などを指定)
-   * @param {string} rawLoc - 生の拠点名（例: "つくば", "【亀有内科】"）
-   * @param {string} docSpecialty - 医師の専門（例: "小児科", "内科"）
-   * @param {Date} workDate - 勤務日 (Dateオブジェクト)
-   * @param {string} rawStartTime - 開始時間（例: "09:00"）
-   * @param {string} rawEndTime - 終了時間（例: "21:00"）
-   * @param {boolean} isHol - 祝日判定フラグ (呼び出し元で解決して渡すこと)
-   * @param {string} shiftFullTimeStr - フルシフト時間（内部生成も可）
-   * @param {string} contractText - 【NEW】契約テキスト（内訳判定用）
-   * @returns {Array} 算出された各コマの時給オブジェクトの配列
    */
   function calculate(medId, rawLoc, docSpecialty, workDate, rawStartTime, rawEndTime, isHol = false, shiftFullTimeStr = "", contractText = "") {
     _init(); 
@@ -66,16 +48,20 @@ const NewWageEngine = (function() {
     const day = workDate.getDay();
     let dayType = "平日";
     if (day === 6) dayType = "土曜";
-    
-    // 日曜日、または呼び出し元から祝日(isHol=true)と指定された場合は「日祝」区分
     if (day === 0 || isHol) dayType = "日祝";
 
     // 2. 拠点の正規化と存在チェック
     const locName = _normalizeLocForChecker(rawLoc, _locDicts.nameMap);
-    const clinicId = _locDicts.idMap[locName];
     
-    if (!locName || !clinicId) {
+    // 拠点名が見つからない場合はエラー
+    if (!locName) {
       throw new Error(`【重大エラー: 拠点不明】入力された拠点「${rawLoc}」は拠点名マスタに登録されていません。`);
+    }
+
+    const clinicId = _locDicts.idMap[locName];
+    // ★ ご指示の通り：ID（番号）が設定されていない拠点は「未登録」とみなし、エラーを出さずに処理をスキップする
+    if (!clinicId || clinicId === "") {
+      return []; 
     }
 
     // 診療科の自動判定（亀有・北葛西の特例ルール）
@@ -94,7 +80,7 @@ const NewWageEngine = (function() {
       throw new Error(`【重大エラー: シフト時間異常】指定時間（${rawStartTime}-${rawEndTime}）が規定コマに存在しないか、絶対的休診時間(13-15時)に該当します。`);
     }
 
-    // ★ シフト全体の時間文字列を生成（マスタ検索用）
+    // シフト全体の時間文字列を生成（マスタ検索用）
     if (!shiftFullTimeStr) {
       const normalizeTime = (t) => {
         if (!t) return "";
@@ -112,7 +98,7 @@ const NewWageEngine = (function() {
         workDate, dayType, 
         slotStartTime: slot.start, slotEndTime: slot.end, slotName: slot.name,
         shiftFullTimeStr: shiftFullTimeStr,
-        contractText: contractText, // ★ テキストを判定エンジンへパス
+        contractText: contractText,
         baseWageDB: _baseWageDB, specialWageDB: _specialWageDB
       });
 
@@ -139,7 +125,6 @@ const NewWageEngine = (function() {
     const data = sheet.getDataRange().getValues();
     let nameMap = {}, idMap = {};
     
-    // ヘッダーを飛ばして2行目から読み込み
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       let canonical = row[0] ? String(row[0]).trim() : "";
@@ -149,7 +134,6 @@ const NewWageEngine = (function() {
       nameMap[canonical] = canonical;
       if (cId) idMap[canonical] = cId;
       
-      // 表記ゆれ（エイリアス）の登録
       for (let j = 1; j <= 4; j++) {
         let variant = row[j] ? String(row[j]).replace(/[\s ]+/g, "") : "";
         if (variant) nameMap[variant] = canonical;
@@ -160,7 +144,6 @@ const NewWageEngine = (function() {
 
   function _normalizeLocForChecker(rawText, dict) {
     if (!rawText) return "";
-    // 【内科】などの括弧書きや、スラッシュ以降の備考を削除し、空白を詰める
     let cleanName = String(rawText).replace(/[【】\(（]?(内科|小児科)[\)）]?/g, "").replace(/\/.*/, "").replace(/[\s ]+/g, "");
     return dict[cleanName] || cleanName;
   }
@@ -171,7 +154,7 @@ const NewWageEngine = (function() {
     
     targetSheets.forEach(sheetName => {
       const sheet = ss.getSheetByName(sheetName);
-      if (!sheet) return; // シートがなければスキップ
+      if (!sheet) return; 
       
       let yearKey = sheetName.replace('時給', '');
       const values = sheet.getDataRange().getValues();
@@ -197,11 +180,10 @@ const NewWageEngine = (function() {
   function _buildSpecialWageDB(ss) {
     const db = {};
     const sheet = ss.getSheetByName(CONFIG.SPECIAL_WAGE_SHEET);
-    if (!sheet) return db; // 特別時給シートがなければ空のまま返す
+    if (!sheet) return db; 
     
     const values = sheet.getDataRange().getValues();
 
-    // ★ 修正：マスタ重複対策（上書きせず配列で全て保持する）
     const addWage = (key, wage) => {
       if (!db[key]) db[key] = [];
       db[key].push(wage);
@@ -213,7 +195,6 @@ const NewWageEngine = (function() {
       const cId = String(values[i][4]).trim();
       let dayType = String(values[i][5]).trim();
       
-      // ★ 修正：時間表記のゼロパディング（9:00 -> 09:00）によるブレ吸収
       let rawTime = String(values[i][6]).replace(/[～〜]/g, "-").replace(/[\s ]+/g, "").trim();
       let timeParts = rawTime.split('-');
       if (timeParts.length === 2) {
@@ -227,10 +208,9 @@ const NewWageEngine = (function() {
 
       const wage = parseInt(values[i][7], 10);
       
-      if (isNaN(wage)) continue; // 金額が入っていなければスキップ
+      if (isNaN(wage)) continue; 
       if (dayType === "全日") dayType = "ALL";
       
-      // 検索優先度に合わせて複数のキーで配列登録しておく
       if (cId) addWage(`${medId}_${cId}_${dayType}_${timeStr}`, wage);
       if (locName) addWage(`${medId}_NAME:${locName}_${dayType}_${timeStr}`, wage);
     }
@@ -245,7 +225,7 @@ const NewWageEngine = (function() {
     
     const startMin = toMinutes(rawStart);
     let endMin = toMinutes(rawEnd);
-    if (endMin < startMin && endMin !== 0) endMin += 24 * 60; // 日またぎ対応
+    if (endMin < startMin && endMin !== 0) endMin += 24 * 60; 
     
     const DEFINED_SLOTS = [
       { name: "午前", start: "09:00", end: "13:00", sMin: 9*60, eMin: 13*60 },
@@ -253,31 +233,24 @@ const NewWageEngine = (function() {
       { name: "夜間", start: "18:00", end: "21:00", sMin: 18*60, eMin: 21*60 }
     ];
     
-    // 入力時間が規定コマの範囲と被っているものを抽出
     return DEFINED_SLOTS.filter(s => startMin < s.eMin && endMin > s.sMin);
   }
 
   function _calculateSingleSlotWage(p) {
-    // 北葛西の夜間コマは 21:00 ではなく 20:00 終了として判定する特例措置
     let checkEndTime = p.slotEndTime;
     if (p.locName.includes("北葛西") && p.slotName === "夜間") checkEndTime = "20:00";
 
     const timeStr = `${p.slotStartTime}-${checkEndTime}`;
     const fullTimeStr = p.shiftFullTimeStr;
 
-    // ====================================================================
-    // ★ 究極ロジック1：テキストによる土曜日の「平日枠」切り分け
-    // ====================================================================
     let searchDayType = p.dayType === "平日" ? "平日" : "土日祝";
     
     if (p.dayType === "土曜" && p.contractText) {
-      // 契約テキストに祝日と平日が明記され、土曜の特記がない場合は平日扱いとする
       if (p.contractText.includes("祝日") && p.contractText.includes("平日") && !p.contractText.includes("土曜")) {
         searchDayType = "平日";
       }
     }
 
-    // 優先度順にキーを生成して検索（上から順に強い）
     const searchKeys = [
       `${p.medId}_${p.clinicId}_${searchDayType}_${timeStr}`,
       `${p.medId}_NAME:${p.locName}_${searchDayType}_${timeStr}`,
@@ -290,13 +263,11 @@ const NewWageEngine = (function() {
       `${p.medId}_${p.clinicId}_ALL_全時間`
     ];
 
-    // --- 特別時給（絶対優先）の検索 ---
     for (let key of searchKeys) {
       if (p.specialWageDB[key]) {
         const wages = p.specialWageDB[key];
         let finalWage = wages[0];
         
-        // ★ マスタ重複金額の自動選択ロジック
         if (wages.length > 1) {
           if (searchDayType === "平日" && p.dayType === "土曜") finalWage = Math.min(...wages);
           else if (searchDayType === "土日祝" && p.dayType === "土曜") finalWage = Math.min(...wages);
@@ -306,12 +277,9 @@ const NewWageEngine = (function() {
       }
     }
 
-    // ====================================================================
-    // ★ 究極ロジック2：基本時給の取得 ＆ 2025年タイムトラベル比較
-    // ====================================================================
     const year = p.workDate.getFullYear();
-    const month = p.workDate.getMonth() + 1; // 1〜12
-    let termKey = '2026下期'; // デフォルト
+    const month = p.workDate.getMonth() + 1;
+    let termKey = '2026下期'; 
     
     if ((year === 2025 && month >= 4) || (year === 2026 && month <= 3)) {
       termKey = '2025';
@@ -332,14 +300,11 @@ const NewWageEngine = (function() {
       throw new Error(`【重大エラー: 時給空欄】「${p.locName}」の「${p.dayType}・${p.slotName}」の時給が空欄です。`);
     }
 
-    // テキストに2025年度の指定があれば過去の時給表と「高い方」で比較する
     if (p.contractText && (p.contractText.includes("2025年度") || p.contractText.includes("2025年"))) {
       let wage2025 = 0;
       const baseDB_2025 = p.baseWageDB['2025'];
       
-      // 流山特例
       let targetLocFor2025 = p.contractText.includes("流山") ? "流山おおたかの森" : p.locName;
-
       if (baseDB_2025 && baseDB_2025[`${targetLocFor2025}_${p.deptReq}`]) {
         wage2025 = parseInt(baseDB_2025[`${targetLocFor2025}_${p.deptReq}`].rates[p.dayType][p.slotName], 10) || 0;
       }
@@ -351,7 +316,6 @@ const NewWageEngine = (function() {
     return { wage: wageCurrent, baseWage: wageCurrent, type: "基本時給" };
   }
 
-  // 外部に公開するAPI
   return {
     calculate: calculate
   };
