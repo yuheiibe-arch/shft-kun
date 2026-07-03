@@ -3,6 +3,7 @@
  * 00_Batch_Engine.gs
  * バックグラウンドのバッチ処理・キュー管理
  * ★【完全版】時間軸フィルター＆開院日未設定スキップ対応
+ * ★ 半年チャンク分割 ＆ タイムアウト防衛・自己修復機構搭載版
  * ==========================================
  */
 
@@ -33,7 +34,8 @@ function startBackgroundBatch(payload) {
 
 function processBatchQueue() {
   const BATCH_START_TIME = Date.now();
-  const SAFE_TIME_LIMIT = 270000; // 4.5分限界まで連続処理
+  // ★ 変更: スプレッドシートがパンクする前に逃げるため、制限時間を3分(18万ms)に短縮
+  const ACTUAL_TIME_LIMIT = 180000; 
 
   deleteTriggers(); 
   const props = PropertiesService.getScriptProperties();
@@ -138,12 +140,26 @@ function processBatchQueue() {
   }
 
   // =========================================================
-  // ★ 連続描画ループ
+  // ★ 連続描画ループ (半年チャンク分割 ＆ タイムアウト防衛版)
   // =========================================================
+  let processedMonthsInThisRun = 0;
+  const MAX_MONTHS_PER_RUN = 6; // ★ 追加: 最大6ヶ月分で強制的にバトンタッチ（息継ぎ）
+
   while (queue.currentMonthIndex < targetMonths.length) {
-    if (Date.now() - BATCH_START_TIME > SAFE_TIME_LIMIT) {
+    
+    // 1. 半年分（6ヶ月）処理したら強制的にバトンタッチ
+    if (processedMonthsInThisRun >= MAX_MONTHS_PER_RUN) {
+      console.log(`[息継ぎ] ${MAX_MONTHS_PER_RUN}ヶ月分を処理しました。シート保存のためバトンタッチします。`);
       props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-      ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
+      ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
+      return; 
+    }
+
+    // 2. 時間制限（フェイルセーフ）
+    if (Date.now() - BATCH_START_TIME > ACTUAL_TIME_LIMIT) {
+      console.log(`[息継ぎ] 制限時間(3分)に到達しました。バトンタッチします。`);
+      props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
+      ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
       return; 
     }
 
@@ -153,17 +169,38 @@ function processBatchQueue() {
       let filteredDataForMonth = {};
       for (let dStr in originalDataForMonth) {
         let shifts = originalDataForMonth[dStr];
+        
+        // =========================================================
+        // ★ 修正箇所：シフト指定を最優先し、ない場合のみマスタを参照するロジック
+        // =========================================================
         if (isSplitTarget && targetCat) {
           shifts = shifts.filter(s => {
             let docSpec = specialtyMap[s.doctorName] || "不明";
-            if (docSpec === targetCat) return true;
             let text = s.rawShift || "";
-            if (text.includes(targetCat)) return true;
             let otherCat = targetCat === "内科" ? "小児科" : "内科";
-            if (text.includes(otherCat)) return false;
-            return true; 
+            
+            let isBoxMatch = text.includes(targetCat);
+            let isOtherBoxMatch = text.includes(otherCat);
+            let isSubjectMatch = docSpec.includes(targetCat);
+            let isOtherSubjectMatch = docSpec.includes(otherCat);
+
+            // 1. まずシフト文字列（箱）の指定を最優先
+            if (isOtherBoxMatch && !isBoxMatch) {
+              return false;
+            } else if (isBoxMatch) {
+              return true;
+            } 
+            // 2. シフトの指定がない場合のみ、マスタの専門で判定
+            else {
+              if (!isSubjectMatch && isOtherSubjectMatch) {
+                return false;
+              } else {
+                return true;
+              }
+            }
           });
         }
+        
         if (shifts.length > 0) filteredDataForMonth[dStr] = shifts;
       }
 
@@ -171,11 +208,25 @@ function processBatchQueue() {
       const isRendered = renderShiftBlock(ss, subLocName, finalSheetName, yearMonthStr, filteredDataForMonth, targetTerm);
       if (isRendered) isRenderedAny = true;
       
+      // ★ 成功した時のみインデックスと処理数を進める
+      queue.currentMonthIndex++;
+      processedMonthsInThisRun++;
+
     } catch(e) {
       console.error(`[エラー] ${subLocName} (${yearMonthStr}): ${e.message}`);
+      
+      // ★ タイムアウト系のエラーを検知したら、その月は進めずに即逃げる（自己修復・リトライ用）
+      if (e.message.includes("タイムアウト") || e.message.includes("timeout") || e.message.includes("アクセス中") || e.message.includes("サーバー")) {
+        console.warn(`⚠️ スプレッドシートがパンク気味です。5秒後に ${yearMonthStr} から再開します。`);
+        props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
+        // シート側の負荷が下がるのを少し待つため、5秒後に再起動
+        ScriptApp.newTrigger('processBatchQueue').timeBased().after(5000).create();
+        return; // 即座に終了して逃がす
+      }
+      
+      // それ以外のエラーならスキップして次へ
+      queue.currentMonthIndex++;
     }
-
-    queue.currentMonthIndex++;
   }
 
   // =========================================================
@@ -198,6 +249,9 @@ function processBatchQueue() {
     queue.completedCount++;
   }
 
+  // =========================================================
+  // ★ 必ず休んでから「次」のトリガーを呼んでスクリプトを終了する
+  // =========================================================
   if (queue.locations.length > 0) {
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
     ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
