@@ -134,11 +134,14 @@ function _getAreaHelper(loc, map) {
   return "その他";
 }
 
-// ====================================================================
-// ★ 修正箇所：拠点名を受け取り、北葛西なら夜間を20時までに制限する
-// ====================================================================
 function _splitTimeIntoBlocks(sH, eH, locName = "") {
   let chunks = [];
+  
+  // ★ 追加：15-19や17-21など、ユーザ指定の特殊パターンは絶対に分割・丸めを行わずそのまま返す
+  if (sH === 15 && eH === 19) return [{sH: 15, eH: 19}];
+  if (sH === 17 && eH === 21) return [{sH: 17, eH: 21}];
+  if (sH === 17 && eH === 20) return [{sH: 17, eH: 20}];
+
   if (sH === 17) {
     chunks.push({sH: 17, eH: eH});
     return chunks;
@@ -153,14 +156,10 @@ function _splitTimeIntoBlocks(sH, eH, locName = "") {
   return chunks;
 }
 
+// ★ 18時の壁を撤廃し、15:00-19:00などを結合。15:00-21:00などの標準通し枠のみ後から18時で分割する
 function _extractWeeklyBlocks(arr) {
-  let blocks = [];
+  let rawBlocks = [];
   let cur = null;
-  let is17Start = false;
-  const tz = (i) => {
-    if (is17Start && i >= 8) return "PM_NT_MERGED";
-    return i < 4 ? "AM" : i < 6 ? "R" : i < 9 ? "PM" : "NT";
-  };
   
   for (let i = 0; i <= 12; i++) {
     const setObj = i < 12 ? arr[i] : null;
@@ -172,25 +171,40 @@ function _extractWeeklyBlocks(arr) {
 
     if (val) {
       if (!cur) {
-        is17Start = (i === 8);
-        cur = { s: i, e: i, tz: tz(i), freq: val, weeksArr: Array.from(setObj).sort() };
-      } else if (cur.tz !== tz(i) || cur.freq !== val) { 
-        blocks.push(cur);
-        is17Start = (i === 8); 
-        cur = { s: i, e: i, tz: tz(i), freq: val, weeksArr: Array.from(setObj).sort() };
+        cur = { s: i, e: i, freq: val, weeksArr: Array.from(setObj).sort() };
+      } else if (cur.freq !== val || i === 4 || i === 5) { 
+        // 休憩時間(インデックス4=13時, インデックス5=14時)と頻度変更時のみ一旦リセットして切る
+        rawBlocks.push(cur);
+        cur = { s: i, e: i, freq: val, weeksArr: Array.from(setObj).sort() };
       } else {
         cur.e = i;
       }
-    } else if (cur) { 
-      blocks.push(cur); 
+    } else if (cur) {
+      rawBlocks.push(cur);
       cur = null;
-      is17Start = false;
     }
   }
-  return blocks.map(b => ({ 
-    sH: b.s + 9, eH: b.e + 10, 
-    sT: `${('0'+(b.s+9)).slice(-2)}:00`, eT: `${('0'+(b.e+10)).slice(-2)}:00`, 
-    hours: b.e - b.s + 1, freqStr: b.freq, weeksArr: b.weeksArr 
+  
+  // ★ ポストプロセス：塊として抽出された時間枠を、ルールに従って最終調整
+  let finalBlocks = [];
+  rawBlocks.forEach(b => {
+     let sH = b.s + 9;
+     let eH = b.e + 10;
+     
+     // 15:00〜21:00（北葛西は20:00）のような「通し枠」の場合は、15-18 と 18-xx に分割する
+     if (sH === 15 && eH >= 20) {
+        finalBlocks.push({ sH: 15, eH: 18, freq: b.freq, weeksArr: b.weeksArr });
+        finalBlocks.push({ sH: 18, eH: eH, freq: b.freq, weeksArr: b.weeksArr });
+     } else {
+        // 15:00-19:00 や 17:00-21:00 などは上記の条件をすり抜けるため、そのまま(分割されず)出力される
+        finalBlocks.push({ sH: sH, eH: eH, freq: b.freq, weeksArr: b.weeksArr });
+     }
+  });
+  
+  return finalBlocks.map(b => ({ 
+    sH: b.sH, eH: b.eH, 
+    sT: `${('0'+b.sH).slice(-2)}:00`, eT: `${('0'+b.eH).slice(-2)}:00`, 
+    hours: b.eH - b.sH, freqStr: b.freq, weeksArr: b.weeksArr 
   }));
 }
 

@@ -2,7 +2,7 @@
  * ====================================================================
  * 07_Boshukun_DataLoader.gs
  * カレンダー生成・マスタ読み込み・契約備考の解析エンジン
- * ★【完全版】退職日マスタ連携＆最強パーサー
+ * ★【完全版】退職日マスタ連携＆最強パーサー（全角記号網羅版）
  * ====================================================================
  */
 
@@ -115,7 +115,7 @@ function _loadBoshukunData(ctx) {
     const contractWageIdx = data[0].indexOf("契約時給");
     const specialWageIdx = data[0].indexOf("特別時給の内訳");
     
-    // ★ 退職日列のインデックスを取得（ログで確認済みの列）
+    // ★ 退職日列のインデックスを取得
     const retireIdx = data[0].findIndex(h => String(h).includes("退職"));
 
     for (let r = 1; r < data.length; r++) {
@@ -130,9 +130,9 @@ function _loadBoshukunData(ctx) {
       
       const parsedSlots = _parseComplexShiftText(bikou);
 
-      // 1. 備考欄から期間を抽出する
+      // 1. 備考欄から期間を抽出する（★あらゆるハイフン・波ダッシュに対応）
       let periods = [];
-      const periodRegex = /(\d{4})\/(\d{1,2})\/(\d{1,2})\s*[～~-]\s*(?:(\d{4})\/(\d{1,2})\/(\d{1,2}))?/g;
+      const periodRegex = /(\d{4})\/(\d{1,2})\/(\d{1,2})\s*[～~〜\-ー−]\s*(?:(\d{4})\/(\d{1,2})\/(\d{1,2}))?/g;
       let pMatch;
       while ((pMatch = periodRegex.exec(bikou)) !== null) {
         let fromDate = new Date(parseInt(pMatch[1]), parseInt(pMatch[2]) - 1, parseInt(pMatch[3]));
@@ -149,7 +149,7 @@ function _loadBoshukunData(ctx) {
       let retireDateObj = null;
       if (retireVal instanceof Date && !isNaN(retireVal.getTime())) {
         retireDateObj = new Date(retireVal.getTime());
-        retireDateObj.setHours(23, 59, 59, 999); // 退職日当日は勤務可能とするため23:59:59にセット
+        retireDateObj.setHours(23, 59, 59, 999); 
       } else if (String(retireVal).trim() !== "") {
         let parsed = new Date(String(retireVal).trim());
         if (!isNaN(parsed.getTime())) {
@@ -196,10 +196,8 @@ function _loadBoshukunData(ctx) {
           // 4. 【絶対ルール】退職日があれば、すべての期間の終了日を退職日で頭打ちにする
           if (retireDateObj) {
             if (validTo) {
-              // 記載されている終了日と退職日を比べ、早い方を採用する
               validTo = validTo < retireDateObj ? validTo : retireDateObj;
             } else {
-              // 無期限だったものも退職日で終了させる
               validTo = retireDateObj;
             }
           }
@@ -270,7 +268,8 @@ function _parseComplexShiftText(rawText) {
       }
     }
     
-    let timeMatch = t.match(/(\d{1,2})[:：]?(\d{2})?\s*[～~-]\s*(\d{1,2})[:：]?(\d{2})?/);
+    // ★ 時間の抽出：波ダッシュ「〜」、全角マイナス「−」などを完全網羅
+    let timeMatch = t.match(/(\d{1,2})[:：]?(\d{2})?\s*[～~〜\-ー−]\s*(\d{1,2})[:：]?(\d{2})?/);
     if (!timeMatch) return;
     
     let sH = parseInt(timeMatch[1], 10);
