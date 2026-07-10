@@ -2,8 +2,8 @@
  * ==========================================
  * 00_Batch_Engine.gs
  * バックグラウンドのバッチ処理・キュー管理
- * ★【完全版】時間軸フィルター＆開院日未設定スキップ対応
- * ★ 半年チャンク分割 ＆ タイムアウト防衛・自己修復機構搭載版
+ * ★【究極のタイムアウト対策＆白紙化防止版】
+ * 通信を1回にまとめ、ローカルキャッシュでリレーする最強設計
  * ==========================================
  */
 
@@ -21,11 +21,37 @@ function startBackgroundBatch(payload) {
   payload.currentMonthIndex = 0; 
   
   props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(payload));
-  deleteTriggers(); 
-  
+  deleteTriggers();
+
   if (typeof createProgressMonitor === 'function') createProgressMonitor(ss, payload.totalCount);
   if (typeof updateProgressMonitor === 'function') {
-    updateProgressMonitor(ss, 0, payload.totalCount, payload.totalCount * 2, "準備中...（開院日マスタと時間軸を確認中）");
+    updateProgressMonitor(ss, 0, payload.totalCount, payload.totalCount * 2, "準備中...（全拠点のデータを一括ダウンロード中...しばらくお待ちください）");
+  }
+
+  // =========================================================
+  // ★【究極のタイムアウト対策】最初の1回だけ全データを一括取得し、シートにキャッシュする
+  // =========================================================
+  try {
+    const targetYear = parseInt(payload.year, 10);
+    const baseLocs = [...new Set(payload.locations.map(loc => loc.replace(/（.*?）/, '')))];
+    
+    // 外部から一括取得
+    let extractedData = typeof fetchAndOrganizeData === 'function' ? fetchAndOrganizeData(targetYear, payload.term, baseLocs) : {};
+    let rawCache = typeof getMasterRawData === 'function' ? getMasterRawData(targetYear) : {};
+    let specialtyMap = typeof buildDoctorSpecialtyMap === 'function' ? buildDoctorSpecialtyMap(targetYear) : {};
+
+    // 隠しシートに保存
+    _saveBatchCache(ss, {
+      extractedData: extractedData,
+      rawCache: rawCache,
+      specialtyMap: specialtyMap
+    });
+  } catch(e) {
+    if (typeof updateProgressMonitor === 'function') {
+      updateProgressMonitor(ss, 0, payload.totalCount, 0, `🚨 データの一括取得に失敗しました。\n時間をおいて再度お試しください。\nエラー: ${e.message}`);
+    }
+    props.deleteProperty('BOSHUKUN_BATCH_QUEUE');
+    return "Error: " + e.message;
   }
   
   ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
@@ -34,8 +60,7 @@ function startBackgroundBatch(payload) {
 
 function processBatchQueue() {
   const BATCH_START_TIME = Date.now();
-  // ★ 変更: スプレッドシートがパンクする前に逃げるため、制限時間を3分(18万ms)に短縮
-  const ACTUAL_TIME_LIMIT = 180000; 
+  const SAFE_TIME_LIMIT = 270000; // 4.5分限界まで連続処理
 
   deleteTriggers(); 
   const props = PropertiesService.getScriptProperties();
@@ -57,7 +82,7 @@ function processBatchQueue() {
     if (monitorSheet && monitorSheet.getRange("A2").getValue() === true) {
       monitorSheet.getRange("A1:B1").setValue("🛑 処理を緊急停止しました").setBackground("#ea4335");
       props.deleteProperty('BOSHUKUN_BATCH_QUEUE');
-      return; 
+      return;
     }
   } catch(e) {}
 
@@ -68,7 +93,7 @@ function processBatchQueue() {
   const currentYearNum = currentDate.getFullYear();
 
   const subLocName = queue.locations[0]; 
-  const baseLocName = subLocName.replace(/（.*?）/, ''); 
+  const baseLocName = subLocName.replace(/（.*?）/, '');
   const finalSheetName = `${targetYear}${subLocName}`;
   const sheetExists = ss.getSheetByName(finalSheetName) !== null;
 
@@ -78,16 +103,14 @@ function processBatchQueue() {
   // ★ マスタから開院日を取得し、時間軸フィルターをかける
   // =========================================================
   const openDatesMap = getClinicOpeningDates(ss);
-  const clinicOpenDate = openDatesMap[baseLocName]; // Dateオブジェクト または null
+  const clinicOpenDate = openDatesMap[baseLocName];
 
   let targetMonths = [];
   
   if (!clinicOpenDate) {
     // 開院日が未設定の場合は完全スキップ（出力不要）
-    console.log(`[スキップ] ${subLocName} は開院日が未設定のため出力対象外です。`);
     targetMonths = []; 
   } else {
-    // 1. 選択された期間（上期/下期/通年）のベースとなる月を全生成
     let baseMonths = [];
     if (targetTerm === "上期" || targetTerm === "通年") {
        for (let m = 4; m <= 9; m++) baseMonths.push(`${targetYear}/${('0' + m).slice(-2)}`);
@@ -98,7 +121,6 @@ function processBatchQueue() {
        for (let m = 1; m <= 3; m++) baseMonths.push(`${nextYear}/${('0' + m).slice(-2)}`);
     }
 
-    // 2. 開院月以降の月だけに絞り込む（時間軸フィルター）
     let openYearMonthVal = (clinicOpenDate.getFullYear() * 100) + (clinicOpenDate.getMonth() + 1);
     targetMonths = baseMonths.filter(monthStr => {
       let parts = monthStr.split('/');
@@ -106,7 +128,6 @@ function processBatchQueue() {
       return targetYearMonthVal >= openYearMonthVal;
     });
 
-    // 3. 既にシートが存在する場合は「過去月」を上書きから保護する
     if (sheetExists) {
       let currentYearMonthVal = (currentYearNum * 100) + currentMonthNum;
       targetMonths = targetMonths.filter(monthStr => {
@@ -117,14 +138,22 @@ function processBatchQueue() {
     }
   }
 
-  // データ取得
-  let extractedData = {};
-  try {
-    extractedData = typeof fetchAndOrganizeData === 'function' ? fetchAndOrganizeData(targetYear, targetTerm, [baseLocName]) : {};
-  } catch (e) {}
-  const shiftData = extractedData.shifts || {};
-  let rawCache = typeof getMasterRawData === 'function' ? getMasterRawData(targetYear) : {};
-  let specialtyMap = typeof buildDoctorSpecialtyMap === 'function' ? buildDoctorSpecialtyMap(targetYear) : {};
+  // =========================================================
+  // ★ キャッシュから爆速でデータを読み込む（外部通信ゼロ！）
+  // =========================================================
+  let cached = _loadBatchCache(ss);
+  if (!cached) {
+    console.error(`[致命的エラー] キャッシュの読み込みに失敗。白紙化を防ぐためスキップします。`);
+    queue.locations.shift();
+    queue.currentMonthIndex = 0;
+    props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
+    ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
+    return;
+  }
+
+  let shiftData = (cached.extractedData && cached.extractedData.shifts) ? cached.extractedData.shifts : {};
+  let rawCache = cached.rawCache || {};
+  let specialtyMap = cached.specialtyMap || {};
 
   let originalDataForMonth = shiftData[baseLocName] || {};
   let isSplitTarget = (baseLocName === "亀有" || baseLocName === "北葛西");
@@ -132,34 +161,20 @@ function processBatchQueue() {
 
   let isRenderedAny = false;
 
-  // モニター更新
   if (queue.currentMonthIndex === 0 && typeof updateProgressMonitor === 'function') {
-    let msg = targetMonths.length > 0 ? `[ ${subLocName} ] を展開中... (${targetMonths.length}ヶ月分)` : `[ ${subLocName} ] は出力不要のためスキップします`;
-    let remainMin = Math.ceil((queue.locations.length * Math.max(1, targetMonths.length)) * 0.15); 
+    let msg = targetMonths.length > 0 ?
+      `[ ${subLocName} ] を展開中... (${targetMonths.length}ヶ月分)` : `[ ${subLocName} ] は出力不要のためスキップします`;
+    let remainMin = Math.ceil((queue.locations.length * Math.max(1, targetMonths.length)) * 0.15);
     updateProgressMonitor(ss, queue.completedCount, queue.totalCount, remainMin, msg);
   }
 
   // =========================================================
-  // ★ 連続描画ループ (半年チャンク分割 ＆ タイムアウト防衛版)
+  // ★ 連続描画ループ
   // =========================================================
-  let processedMonthsInThisRun = 0;
-  const MAX_MONTHS_PER_RUN = 6; // ★ 追加: 最大6ヶ月分で強制的にバトンタッチ（息継ぎ）
-
   while (queue.currentMonthIndex < targetMonths.length) {
-    
-    // 1. 半年分（6ヶ月）処理したら強制的にバトンタッチ
-    if (processedMonthsInThisRun >= MAX_MONTHS_PER_RUN) {
-      console.log(`[息継ぎ] ${MAX_MONTHS_PER_RUN}ヶ月分を処理しました。シート保存のためバトンタッチします。`);
+    if (Date.now() - BATCH_START_TIME > SAFE_TIME_LIMIT) {
       props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-      ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
-      return; 
-    }
-
-    // 2. 時間制限（フェイルセーフ）
-    if (Date.now() - BATCH_START_TIME > ACTUAL_TIME_LIMIT) {
-      console.log(`[息継ぎ] 制限時間(3分)に到達しました。バトンタッチします。`);
-      props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-      ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
+      ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
       return; 
     }
 
@@ -169,68 +184,33 @@ function processBatchQueue() {
       let filteredDataForMonth = {};
       for (let dStr in originalDataForMonth) {
         let shifts = originalDataForMonth[dStr];
-        
-        // =========================================================
-        // ★ 修正箇所：シフト指定を最優先し、ない場合のみマスタを参照するロジック
-        // =========================================================
         if (isSplitTarget && targetCat) {
           shifts = shifts.filter(s => {
             let docSpec = specialtyMap[s.doctorName] || "不明";
+            if (docSpec === targetCat) return true;
             let text = s.rawShift || "";
+            if (text.includes(targetCat)) return true;
             let otherCat = targetCat === "内科" ? "小児科" : "内科";
-            
-            let isBoxMatch = text.includes(targetCat);
-            let isOtherBoxMatch = text.includes(otherCat);
-            let isSubjectMatch = docSpec.includes(targetCat);
-            let isOtherSubjectMatch = docSpec.includes(otherCat);
-
-            // 1. まずシフト文字列（箱）の指定を最優先
-            if (isOtherBoxMatch && !isBoxMatch) {
-              return false;
-            } else if (isBoxMatch) {
-              return true;
-            } 
-            // 2. シフトの指定がない場合のみ、マスタの専門で判定
-            else {
-              if (!isSubjectMatch && isOtherSubjectMatch) {
-                return false;
-              } else {
-                return true;
-              }
-            }
+            if (text.includes(otherCat)) return false;
+            return true; 
           });
         }
-        
         if (shifts.length > 0) filteredDataForMonth[dStr] = shifts;
       }
 
-      // フィルターを生き残った月は、データが0件でも確実に生成する
+      // ★ 描画処理（白紙化防止ロジック連動）
       const isRendered = renderShiftBlock(ss, subLocName, finalSheetName, yearMonthStr, filteredDataForMonth, targetTerm);
       if (isRendered) isRenderedAny = true;
       
-      // ★ 成功した時のみインデックスと処理数を進める
-      queue.currentMonthIndex++;
-      processedMonthsInThisRun++;
-
     } catch(e) {
       console.error(`[エラー] ${subLocName} (${yearMonthStr}): ${e.message}`);
-      
-      // ★ タイムアウト系のエラーを検知したら、その月は進めずに即逃げる（自己修復・リトライ用）
-      if (e.message.includes("タイムアウト") || e.message.includes("timeout") || e.message.includes("アクセス中") || e.message.includes("サーバー")) {
-        console.warn(`⚠️ スプレッドシートがパンク気味です。5秒後に ${yearMonthStr} から再開します。`);
-        props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-        // シート側の負荷が下がるのを少し待つため、5秒後に再起動
-        ScriptApp.newTrigger('processBatchQueue').timeBased().after(5000).create();
-        return; // 即座に終了して逃がす
-      }
-      
-      // それ以外のエラーならスキップして次へ
-      queue.currentMonthIndex++;
     }
+
+    queue.currentMonthIndex++;
   }
 
   // =========================================================
-  // ★ 1拠点完了時の色塗りと不要列削除
+  // ★ 1拠点完了時の処理
   // =========================================================
   if (queue.currentMonthIndex >= targetMonths.length) {
     let finalSheet = ss.getSheetByName(finalSheetName);
@@ -249,9 +229,6 @@ function processBatchQueue() {
     queue.completedCount++;
   }
 
-  // =========================================================
-  // ★ 必ず休んでから「次」のトリガーを呼んでスクリプトを終了する
-  // =========================================================
   if (queue.locations.length > 0) {
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
     ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
@@ -262,17 +239,57 @@ function processBatchQueue() {
     queue.status = "COMPLETED";
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
     safeGenerateAreaIndexSheets(ss);
+
+    // ★ 完了後にキャッシュシートをお掃除
+    let cacheSheet = ss.getSheetByName("⚙️通信キャッシュ");
+    if (cacheSheet) ss.deleteSheet(cacheSheet);
   }
 }
 
 // =========================================================
-// ★ 初期設定マスタから全開院日をマップ化（未設定はnull）
+// ★ ローカルキャッシュ用 ヘルパー関数（データ容量制限の突破）
+// =========================================================
+function _saveBatchCache(ss, dataObj) {
+  let sheet = ss.getSheetByName("⚙️通信キャッシュ");
+  if (!sheet) {
+    sheet = ss.insertSheet("⚙️通信キャッシュ");
+    sheet.hideSheet();
+  } else {
+    sheet.clear();
+  }
+  let jsonStr = JSON.stringify(dataObj);
+  let chunks = [];
+  // Googleのセル文字数制限(5万字)を超えないよう4.5万字ごとに分割
+  for (let i = 0; i < jsonStr.length; i += 45000) {
+    chunks.push([jsonStr.substring(i, i + 45000)]);
+  }
+  if (chunks.length > 0) {
+    sheet.getRange(1, 1, chunks.length, 1).setValues(chunks);
+  }
+}
+
+function _loadBatchCache(ss) {
+  let sheet = ss.getSheetByName("⚙️通信キャッシュ");
+  if (!sheet) return null;
+  let maxRow = sheet.getLastRow();
+  if (maxRow === 0) return null;
+  let data = sheet.getRange(1, 1, maxRow, 1).getValues();
+  let jsonStr = data.map(r => r[0]).join('');
+  if (!jsonStr) return null;
+  try {
+    return JSON.parse(jsonStr);
+  } catch(e) {
+    return null;
+  }
+}
+
+// =========================================================
+// ★ 開院日マップの取得
 // =========================================================
 function getClinicOpeningDates(ss) {
   let map = {};
   const masterSheet = ss.getSheetByName("初期設定");
   if (!masterSheet) return map;
-
   const data = masterSheet.getDataRange().getValues();
   if (data.length < 2) return map;
 
@@ -296,7 +313,7 @@ function getClinicOpeningDates(ss) {
         } else if (rawDate && String(rawDate).trim() !== "") {
           map[locName] = new Date(rawDate);
         } else {
-          map[locName] = null; // 未設定は明確に弾く
+          map[locName] = null;
         }
       }
     }
@@ -305,7 +322,6 @@ function getClinicOpeningDates(ss) {
 }
 
 function buildDoctorSpecialtyMap(year) {
-  // 既存の処理
   const masterUrl = 'https://docs.google.com/spreadsheets/d/1aEjphEv_63SeWQmwiOy9sx7IrMfawU01sHbKd_Ki4iA/edit';
   let map = {};
   try {
