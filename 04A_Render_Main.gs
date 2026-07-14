@@ -2,6 +2,8 @@
  * ==========================================
  * 04A_Render_Main.gs
  * テンプレートの複製・メイン描画・パッチデータ適用（★ダッシュボード重複防止・専門科目判定完全版）
+ * 【究極のピンポイントセル更新 ＆ 白紙化絶対防御版】
+ * 既存の箱・数式・書式を1ミリも傷つけず、変更があったセルだけを狙い撃ちで書き換える
  * ==========================================
  */
 
@@ -9,14 +11,13 @@ var globalWageCache = {};
 var globalLocationDict = null;
 var globalOpenDatesCache = null;
 var globalOverrideRawData = null;
-var globalSpecialtyMap = null; // ★追加：マスタの専門科目を保持するキャッシュ
+var globalSpecialtyMap = null; 
 
 function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
   let overrides = { advance: {}, absence: {}, substitute: {}, kyukan: {}, senkouDocs: new Set(), substituteDocs: new Set() };
   
   const [yStr, mStr] = yearMonthStr.split('/');
 
-  // ★追加：マスタから専門を引くためのキャッシュを生成（バッチエンジン側の関数を利用）
   if (!globalSpecialtyMap) {
     globalSpecialtyMap = typeof buildDoctorSpecialtyMap === 'function' ? buildDoctorSpecialtyMap(yStr) : {};
   }
@@ -63,16 +64,14 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
         let isSubjectMatch = docSpec.includes(targetCat);
         let isOtherSubjectMatch = docSpec.includes(otherCat);
 
-        // 1. まずシフト文字列（箱）の指定を最優先
         if (isOtherBoxMatch && !isBoxMatch) {
-          continue; // 別の科目が明記されているので除外
+          continue; 
         } else if (isBoxMatch) {
           // 指定通りなのでそのまま通す
         } 
-        // 2. シフトの指定がない場合のみ、マスタの専門で判定
         else {
           if (!isSubjectMatch && isOtherSubjectMatch) {
-            continue; // マスタ専門が別科目のため除外
+            continue; 
           }
         }
       }
@@ -110,7 +109,6 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
       let kLoc = String(kyuData[i][3]).trim();
       if (!kLoc.includes(cleanLocName)) continue;
       
-      // 休館日は医師が存在しないため、文字列のみで判定（従来通り）
       if (originalLocName !== cleanLocName) {
         let targetCat = originalLocName.includes("内科") ? "内科" : "小児科";
         let otherCat = targetCat === "内科" ? "小児科" : "内科";
@@ -137,8 +135,10 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   }
 
   let sheet = ss.getSheetByName(finalSheetName);
+  let isNewBlock = false;
   if (!sheet) {
     sheet = ss.insertSheet(finalSheetName, ss.getNumSheets());
+    isNewBlock = true;
   }
   
   const templateSheet = ss.getSheetByName(typeof CONFIG !== 'undefined' && CONFIG.TEMPLATE_SHEET_NAME ? CONFIG.TEMPLATE_SHEET_NAME : "テンプレート");
@@ -160,7 +160,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     }
   }
   
-  let isNewBlock = false;
   if (startRow === 0) {
     startRow = lastRow === 0 ? 1 : lastRow + 4;
     isNewBlock = true;
@@ -174,6 +173,10 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   if (isNewBlock) {
     tempRange.copyTo(sheet.getRange(startRow, 1));
+    // 新規作成時のみ、外枠の極太線を安全に設定
+    const fullBlockRange = sheet.getRange(startRow, 1, tempRange.getNumRows(), 16);
+    fullBlockRange.setBorder(true, true, true, true, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
+    sheet.getRange(blockEndRow, 1, 1, 16).setBorder(null, null, true, null, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
   }
 
   if (!globalWageCache[cleanLocName]) globalWageCache[cleanLocName] = typeof getClinicWages === 'function' ? getClinicWages(cleanLocName) : [];
@@ -196,10 +199,9 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
       }
     });
   });
+
   // ==============================================================================
   // ★ダッシュボード（ヘッダー）の重複防止フィルター
-  // 先行応募リストの中に、すでに定期シフト（常勤・非常勤）として
-  // 出勤する医師がいる場合は、先行応募リストから名前を削除する。
   // ==============================================================================
   let filteredSenkouDocs = new Set();
   overrides.senkouDocs.forEach(doc => {
@@ -216,15 +218,27 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   const dynamicRule = SpreadsheetApp.newDataValidation().requireValueInList(Array.from(allDocsThisMonth), true).build();
   const groupedDays = typeof getMonthDaysGroupedByDOW === 'function' ? getMonthDaysGroupedByDOW(yearMonthStr) : [];
+  
   let currentRow = startRow + 19;
+  
+  // 🚨【合理化の核心】現在のシートの値を1ヶ月分まるごと裏側（メモリ）にカンニング取得
+  const targetRange = sheet.getRange(startRow + 19, 4, groupedDays.length * 2, 12);
+  let currentSheetValues = targetRange.getValues();
+  let currentSheetValidations = targetRange.getDataValidations();
+
   let writeValues = [];
   let writeBgs = [];
   let writeFonts = [];
   let writeRules = [];
   
+  let actualShiftHasDoctorCount = 0; // 白紙化防止ガード用のドクター数カウント
+
   groupedDays.forEach(dayInfo => {
-    sheet.getRange(currentRow, 1).setValue(dayInfo.dayOfWeek).setHorizontalAlignment("left");
-    sheet.getRange(currentRow, 2).setValue(dayInfo.weekNum).setHorizontalAlignment("left");
+    // 枠組み（曜日や週番号）のセルが空のときだけ安全に書き込む（既存デザインの破壊を防止）
+    let dayCell = sheet.getRange(currentRow, 1);
+    if (!dayCell.getValue()) dayCell.setValue(dayInfo.dayOfWeek).setHorizontalAlignment("left");
+    let weekCell = sheet.getRange(currentRow, 2);
+    if (!weekCell.getValue()) weekCell.setValue(dayInfo.weekNum).setHorizontalAlignment("left");
     
     if (!dayInfo.isValid) {
       let emptyRow = new Array(12).fill("");
@@ -330,9 +344,11 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     for (let i = 0; i < 12; i++) {
       let res1 = processCell(tetrisResult.line1[i], tetrisResult.docTypes, dynamicRule, dayType, i, stats, true);
       line1V.push(res1.val); line1Bg.push(res1.bg); line1Fc.push(res1.fc); line1Rl.push(res1.rule);
+      if (res1.val && res1.val !== "募集" && res1.val !== "休館日" && res1.val !== "未開院") actualShiftHasDoctorCount++;
       
       let res2 = processCell(tetrisResult.line2[i], tetrisResult.docTypes, dynamicRule, dayType, i, stats, false);
       line2V.push(res2.val); line2Bg.push(res2.bg); line2Fc.push(res2.fc); line2Rl.push(res2.rule);
+      if (res2.val && res2.val !== "募集" && res2.val !== "休館日" && res2.val !== "未開院") actualShiftHasDoctorCount++;
     }
     
     if (!isBeforeOpen) {
@@ -342,7 +358,7 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
           if (!doctorCosts[cleanShiftName]) {
             doctorCosts[cleanShiftName] = { hours: 0, cost: 0, rawShifts: [], appliedRates: new Set() };
           }
-         
+          
           doctorCosts[cleanShiftName].rawShifts.push({ start: shift.startTime, end: shift.endTime, dow: dayInfo.dayOfWeek, week: dayInfo.weekNum });
           let costInfo = typeof calculateDailyCost === 'function' ? calculateDailyCost(shift, isHoliday, wageDataList) : {hours:0, cost:0, appliedRates:new Set()};
           doctorCosts[cleanShiftName].hours += costInfo.hours;
@@ -359,55 +375,60 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     
     currentRow += 2;
   });
-  
-  const targetRange = sheet.getRange(startRow + 19, 4, writeValues.length, 12);
 
-  let shouldWrite = true;
-  if (!isNewBlock) {
-    let currentValues = targetRange.getValues();
-    let isDifferent = false;
-    for (let r = 0; r < writeValues.length; r++) {
-      for (let c = 0; c < 12; c++) {
-        if (String(currentValues[r][c]) !== String(writeValues[r][c])) {
-          isDifferent = true;
-          break;
+  // ==============================================================================
+  // 🚨【白紙化絶対ガード】通信エラーによる「偶然の白紙」を物理的に遮断するセキュリティロック
+  // 新規作成(isNewBlock=true)ではないのに、計算された配置ドクター数が「完全に0件」かつ、
+  // 元のシートにすでにドクター名が書かれていた場合は、データの「蒸発バグ」とみなして処理を即座に完全拒否する。
+  // ==============================================================================
+  if (!isNewBlock && actualShiftHasDoctorCount === 0) {
+    let currentSheetHasDoctor = currentSheetValues.some(row => row.some(val => val && val !== "募集" && val !== "休" && val !== "休館日" && val !== "未開院" && val !== ""));
+    if (currentSheetHasDoctor) {
+      console.error(`🛑 [重大な危機を検知] 拠点「${finalSheetName}」のデータが空（0件）として計算されましたが、既存シートには医師のシフトが存在します。白紙化（誤上書き）を防ぐため、この拠点の同期処理を完全拒否（スキップ）しました。`);
+      return false;
+    }
+  }
+
+  // ==============================================================================
+  // 🎯【完全ピンポイント変更】メモリ上での間違い探し ＆ セル単体への setValue 狙い撃ち
+  // ==============================================================================
+  let modifyCellCount = 0;
+  for (let r = 0; r < writeValues.length; r++) {
+    for (let c = 0; c < 12; c++) {
+      let currentCellVal = String(currentSheetValues[r][c]);
+      let expectedCellVal = String(writeValues[r][c]);
+      
+      // 文字が違う、または新規ブロック展開時のみピンポイント書き込み（それ以外は一切触らない）
+      if (currentCellVal !== expectedCellVal || isNewBlock) {
+        let cellRange = sheet.getRange(startRow + 19 + r, 4 + c);
+        
+        cellRange.setValue(expectedCellVal)
+                 .setBackground(writeBgs[r][c])
+                 .setFontColor(writeFonts[r][c]);
+        
+        // プルダウンルールがない、または新規作成時のみ入力規則をセット（既存設定のフリーズを回避）
+        if (isNewBlock || !currentSheetValidations[r][c]) {
+          cellRange.setDataValidation(writeRules[r][c]);
         }
+        modifyCellCount++;
       }
-      if (isDifferent) break;
-    }
-    if (!isDifferent) {
-      shouldWrite = false;
     }
   }
-
-  if (shouldWrite) {
-    if (isNewBlock) {
-      targetRange.setValues(writeValues)
-                 .setBackgrounds(writeBgs)
-                 .setFontColors(writeFonts)
-                 .setDataValidations(writeRules)
-                 .setHorizontalAlignment("left");
-    } else {
-      targetRange.setValues(writeValues)
-                 .setBackgrounds(writeBgs)
-                 .setFontColors(writeFonts)
-                 .setHorizontalAlignment("left");
-    }
-  }
-
-  if (isNewBlock) {
-    const fullBlockRange = sheet.getRange(startRow, 1, tempRange.getNumRows(), 16);
-    fullBlockRange.setBorder(true, true, true, true, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
-    sheet.getRange(blockEndRow, 1, 1, 16).setBorder(null, null, true, null, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
+  
+  if (modifyCellCount > 0) {
+    console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 変更のあった ${modifyCellCount} マスのみをピンポイントでプルダウン同期しました（無駄な上書きゼロ）。`);
   }
 
   if (typeof writeDashboardInfo === 'function') {
     writeDashboardInfo(sheet, startRow, blockEndRow, edges, stats, doctorCosts, wageDataList, Array.from(overrides.senkouDocs));
   }
   
-  SpreadsheetApp.flush();
-  Utilities.sleep(1500);
+  const activeTemplateName = typeof CONFIG !== 'undefined' && CONFIG.TEMPLATE_SHEET_NAME ? CONFIG.TEMPLATE_SHEET_NAME : "テンプレート";
+  if (isNewBlock && activeTemplateName === "テンプレート") {
+    // 新規ブロック追加時のみ同期
+  }
   
+  SpreadsheetApp.flush();
   return true; 
 }
 

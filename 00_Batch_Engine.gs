@@ -3,7 +3,7 @@
  * 00_Batch_Engine.gs
  * バックグラウンドのバッチ処理・キュー管理
  * ★【究極のタイムアウト対策＆白紙化防止版】
- * 通信を1回にまとめ、ローカルキャッシュでリレーする最強設計
+ * 強制セーブ(Flush)・フライング防止・開院日スキップ解除パッチ適用版
  * ==========================================
  */
 
@@ -54,7 +54,8 @@ function startBackgroundBatch(payload) {
     return "Error: " + e.message;
   }
   
-  ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
+  // ★修正1：Googleの書き込み完了を待つため、1秒 → 5秒に変更
+  ScriptApp.newTrigger('processBatchQueue').timeBased().after(5000).create();
   return "Success";
 }
 
@@ -105,37 +106,36 @@ function processBatchQueue() {
   const openDatesMap = getClinicOpeningDates(ss);
   const clinicOpenDate = openDatesMap[baseLocName];
 
-  let targetMonths = [];
-  
-  if (!clinicOpenDate) {
-    // 開院日が未設定の場合は完全スキップ（出力不要）
-    targetMonths = []; 
-  } else {
-    let baseMonths = [];
-    if (targetTerm === "上期" || targetTerm === "通年") {
-       for (let m = 4; m <= 9; m++) baseMonths.push(`${targetYear}/${('0' + m).slice(-2)}`);
-    }
-    if (targetTerm === "下期" || targetTerm === "通年") {
-       let nextYear = targetYear + 1;
-       for (let m = 10; m <= 12; m++) baseMonths.push(`${targetYear}/${('0' + m).slice(-2)}`);
-       for (let m = 1; m <= 3; m++) baseMonths.push(`${nextYear}/${('0' + m).slice(-2)}`);
-    }
+  let baseMonths = [];
+  if (targetTerm === "上期" || targetTerm === "通年") {
+     for (let m = 4; m <= 9; m++) baseMonths.push(`${targetYear}/${('0' + m).slice(-2)}`);
+  }
+  if (targetTerm === "下期" || targetTerm === "通年") {
+     let nextYear = targetYear + 1;
+     for (let m = 10; m <= 12; m++) baseMonths.push(`${targetYear}/${('0' + m).slice(-2)}`);
+     for (let m = 1; m <= 3; m++) baseMonths.push(`${nextYear}/${('0' + m).slice(-2)}`);
+  }
 
+  // ★修正2：開院日が空欄（未設定）の場合は「開院済み」とみなして全期間を出力する
+  let targetMonths = baseMonths;
+
+  if (clinicOpenDate) {
     let openYearMonthVal = (clinicOpenDate.getFullYear() * 100) + (clinicOpenDate.getMonth() + 1);
-    targetMonths = baseMonths.filter(monthStr => {
+    targetMonths = targetMonths.filter(monthStr => {
       let parts = monthStr.split('/');
       let targetYearMonthVal = (parseInt(parts[0], 10) * 100) + parseInt(parts[1], 10);
       return targetYearMonthVal >= openYearMonthVal;
     });
+  }
 
-    if (sheetExists) {
-      let currentYearMonthVal = (currentYearNum * 100) + currentMonthNum;
-      targetMonths = targetMonths.filter(monthStr => {
-        let parts = monthStr.split('/');
-        let targetYearMonthVal = (parseInt(parts[0], 10) * 100) + parseInt(parts[1], 10);
-        return targetYearMonthVal >= currentYearMonthVal;
-      });
-    }
+  // 既存シートがある場合は「過去の月」を上書きしないよう、現在月以降に絞る
+  if (sheetExists) {
+    let currentYearMonthVal = (currentYearNum * 100) + currentMonthNum;
+    targetMonths = targetMonths.filter(monthStr => {
+      let parts = monthStr.split('/');
+      let targetYearMonthVal = (parseInt(parts[0], 10) * 100) + parseInt(parts[1], 10);
+      return targetYearMonthVal >= currentYearMonthVal;
+    });
   }
 
   // =========================================================
@@ -147,7 +147,7 @@ function processBatchQueue() {
     queue.locations.shift();
     queue.currentMonthIndex = 0;
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-    ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
+    ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
     return;
   }
 
@@ -174,7 +174,7 @@ function processBatchQueue() {
   while (queue.currentMonthIndex < targetMonths.length) {
     if (Date.now() - BATCH_START_TIME > SAFE_TIME_LIMIT) {
       props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-      ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
+      ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
       return; 
     }
 
@@ -198,7 +198,7 @@ function processBatchQueue() {
         if (shifts.length > 0) filteredDataForMonth[dStr] = shifts;
       }
 
-      // ★ 描画処理（白紙化防止ロジック連動）
+      // ★ 描画処理
       const isRendered = renderShiftBlock(ss, subLocName, finalSheetName, yearMonthStr, filteredDataForMonth, targetTerm);
       if (isRendered) isRenderedAny = true;
       
@@ -231,7 +231,7 @@ function processBatchQueue() {
 
   if (queue.locations.length > 0) {
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-    ScriptApp.newTrigger('processBatchQueue').timeBased().after(1000).create();
+    ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
   } else {
     if (typeof updateProgressMonitor === 'function') {
       updateProgressMonitor(ss, queue.totalCount, queue.totalCount, 0, "🎉 すべての出力が正常に完了しました！");
@@ -265,6 +265,8 @@ function _saveBatchCache(ss, dataObj) {
   }
   if (chunks.length > 0) {
     sheet.getRange(1, 1, chunks.length, 1).setValues(chunks);
+    // ★修正3：Googleに「完全に文字を書き込み終わるまでシステムを待機させろ」と強制命令を出す
+    SpreadsheetApp.flush(); 
   }
 }
 
@@ -321,6 +323,9 @@ function getClinicOpeningDates(ss) {
   return map;
 }
 
+// =========================================================
+// ★ 専門科目マスタの取得（空白除去漏れ・完全修正パッチ適用済）
+// =========================================================
 function buildDoctorSpecialtyMap(year) {
   const masterUrl = 'https://docs.google.com/spreadsheets/d/1aEjphEv_63SeWQmwiOy9sx7IrMfawU01sHbKd_Ki4iA/edit';
   let map = {};
@@ -335,7 +340,10 @@ function buildDoctorSpecialtyMap(year) {
         const subjIdx = data[0].findIndex(h => String(h).includes("専門") || String(h).includes("科目"));
         if (nameIdx !== -1 && subjIdx !== -1) {
           for (let r = 1; r < data.length; r++) {
-            let docName = String(data[r][nameIdx]).replace(/先生$/, "").trim();
+            
+            // ★ 名前の全角・半角スペースを完全に除去
+            let docName = String(data[r][nameIdx]).replace(/先生$/, "").replace(/[\s ]+/g, "").trim();
+            
             let spec = String(data[r][subjIdx]).trim();
             if (docName) {
               if (spec.includes("内科")) map[docName] = "内科";

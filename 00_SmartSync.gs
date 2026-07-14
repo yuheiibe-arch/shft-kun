@@ -222,3 +222,29 @@ function processDoGetBackground() {
   // ターゲットの指定がない場合は従来のスマート更新
   checkAndStartSmartSync(targetYear, "通年");
 }
+// ==========================================
+// 【夜間バッチ】スマート更新の自動定期実行用
+// ==========================================
+function triggerNightlySmartSync() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let maxYear = 0;
+  
+  // 作成済みのシート名から「最新年度」を自動取得
+  ss.getSheets().forEach(s => {
+    const match = s.getName().match(/^(\d{4})/);
+    if (match) {
+      const y = parseInt(match[1], 10);
+      if (y > maxYear) maxYear = y;
+    }
+  });
+  
+  if (maxYear === 0) {
+    console.log("対象の年度シートが見つからないためスキップします。");
+    return;
+  }
+  
+  console.log(`🌙 夜間スマート更新を開始します: ${maxYear}年度 / 通年`);
+  
+  // スマート更新のコアエンジンを起動（制限時間6分をフル活用）
+  checkAndStartSmartSync(String(maxYear), "通年");
+}
