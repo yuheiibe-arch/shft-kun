@@ -61,7 +61,8 @@ function startBackgroundBatch(payload) {
 
 function processBatchQueue() {
   const BATCH_START_TIME = Date.now();
-  const SAFE_TIME_LIMIT = 270000; // 4.5分限界まで連続処理
+  // ★修正：GoogleサーバーのINTERNALエラー（パンク）を防ぐため、連続処理の限界を 4.5分 -> 3分(180000) に短縮
+  const SAFE_TIME_LIMIT = 180000; 
 
   deleteTriggers(); 
   const props = PropertiesService.getScriptProperties();
@@ -216,6 +217,14 @@ function processBatchQueue() {
     let finalSheet = ss.getSheetByName(finalSheetName);
     if (finalSheet && isRenderedAny) {
       if (finalSheet.getMaxColumns() > 16) finalSheet.deleteColumns(17, finalSheet.getMaxColumns() - 16);
+      
+      // ★ 追加：全月展開が終わった後、シート下部に残った「ゴミ行」を綺麗に掃除する
+      let finalLastRow = finalSheet.getLastRow();
+      let finalMaxRow = finalSheet.getMaxRows();
+      if (finalMaxRow > finalLastRow + 5) {
+        finalSheet.deleteRows(finalLastRow + 6, finalMaxRow - finalLastRow - 5);
+      }
+
       safeExecute(() => syncSheetIndependent(finalSheet), 3, "書式・プルダウン同期");
       
       if (typeof computeStableHash === 'function') {

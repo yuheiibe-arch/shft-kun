@@ -2,7 +2,7 @@
  * ==========================================
  * 04C_Render_Sync.gs
  * 自動同期・条件付き書式の反映・onEditイベント
- * ★プルダウン一括設定（API通信1回）究極対応版
+ * ★プルダウン一括設定（2次元配列による完全爆速版 ＆ 先行応募色塗り追加）
  * ==========================================
  */
 
@@ -51,12 +51,12 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
   let alignRanges = [];
   
   // ====================================================================
-  // ★ 諸悪の根源（個別ループ通信）を撤廃し、2次元配列で一気に処理する
+  // ★ ユーザー様考案の最強ロジック復活：2次元配列でルールを構築する
   // ====================================================================
   const targetRange = sheet.getRange(1, 4, maxRows, 12); // D列〜O列の全行を一気に取得
   let currentRules = targetRange.getDataValidations();
   let rulesModified = false;
-
+  
   for (let r = 0; r < maxRows; r++) {
     let rowNum = r + 1;
     let labelA = String(data[r][0]).trim(); 
@@ -74,6 +74,13 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
       for (let i = 0; i < finalT.length && i < 7; i++) { vals[i] = finalT[i]; bgs[i] = teikiColor; }
       sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
     }
+    // ★追加：先行応募の色塗り
+    else if (labelA === "先行応募" || labelA === "先行応募医師") {
+      let vals = new Array(7).fill("");
+      let bgs = new Array(7).fill(emptyColor);
+      for (let i = 0; i < finalS.length && i < 7; i++) { vals[i] = finalS[i]; bgs[i] = senkouColor; }
+      sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
+    }
     
     if (labelC === "1診目" || labelC === "2診目") {
       alignRanges.push(`D${rowNum}:O${rowNum}`);
@@ -85,7 +92,7 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
     }
   }
 
-  // 左詰めの一括適用
+  // 左詰めの一括適用 (RangeListは水平揃えには使用可能)
   if (alignRanges.length > 0) {
     sheet.getRangeList(alignRanges).setHorizontalAlignment("left");
   }
@@ -95,7 +102,7 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
     targetRange.setDataValidations(currentRules);
   }
 
-  updateSheetWideCF(sheet, finalJ, finalT, finalS);
+  updateSheetWideCF(sheet, finalJ, finalT, finalS, maxRows);
 }
 
 function syncSheetIndependent(sheet) {
@@ -129,9 +136,10 @@ function syncSheetIndependent(sheet) {
   applyMasterListToAll(sheet, joukinList, teikiList, senkouList);
 }
 
-function updateSheetWideCF(sheet, joukinList, teikiList, senkouList) {
+function updateSheetWideCF(sheet, joukinList, teikiList, senkouList, maxRows) {
   let rules = [];
-  const targetRange = sheet.getRange("D:O"); 
+  // 無限範囲(D:O)を辞め、実際のデータ行数までに制限
+  const targetRange = sheet.getRange(1, 4, maxRows, 12); 
 
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("募集").setBackground("#ffff00").setFontColor("#000000").setRanges([targetRange]).build());
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("休").setBackground("#cccccc").setFontColor("#cccccc").setRanges([targetRange]).build());

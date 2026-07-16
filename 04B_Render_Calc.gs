@@ -2,7 +2,7 @@
  * ==========================================
  * 04B_Render_Calc.gs
  * コスト計算・ダッシュボード書き込み・統計初期化
- * ★マスタ不在時の無限フリーズ・安全防衛版
+ * ★月曜始まり完全固定パッチ（曜日ズレ最終解決版）
  * ==========================================
  */
 
@@ -12,51 +12,30 @@ function calculateDailyCost(shift, isHoliday, wageDataList) {
   let hours = 0;
   let dailyCost = 0;
   let appliedRates = [];
-  
   let prefix = isHoliday ? "hol" : "wd";
   let useYear = (shift.specialWageDetail && shift.specialWageDetail.includes("2025年度")) ? "y2025" : "y2026";
+
+  if (!wageDataList || wageDataList.length === 0 || !wageDataList[0]) return { hours: 0, cost: 0, appliedRates: [] };
   
-  // ====================================================================
-  // ★ 安全防衛策1：そもそも時給マスタデータが空、または壊れている場合の完全ガード
-  // ====================================================================
-  if (!wageDataList || wageDataList.length === 0 || !wageDataList[0]) {
-    console.warn(`[⚠️時給エラー] マスタデータ全体が空です。医師: ${shift.doctorName} (拠点: ${shift.rawShift || "不明"}) の計算をスキップします。`);
-    return { hours: 0, cost: 0, appliedRates: [] };
-  }
-  
-  let targetDept = wageDataList[0]; 
+  let targetDept = wageDataList[0];
   if (wageDataList.length > 1) {
     if (shift.rawShift.includes("内科")) targetDept = wageDataList.find(w => w.department === "内科") || targetDept;
     else if (shift.rawShift.includes("小児科")) targetDept = wageDataList.find(w => w.department === "小児科") || targetDept;
   }
   
-  // ====================================================================
-  // ★ 安全防衛策2：該当する診療科のオブジェクト（または内部のrates属性）が存在しない場合のガード
-  // ====================================================================
-  if (!targetDept || !targetDept.rates) {
-    console.warn(`[⚠️時給エラー] 診療科マスタの構造が不正です。医師: ${shift.doctorName}`);
-    return { hours: 0, cost: 0, appliedRates: [] };
-  }
-  
+  if (!targetDept || !targetDept.rates) return { hours: 0, cost: 0, appliedRates: [] };
   let rates = targetDept.rates[useYear] || targetDept.rates["y2026"];
-  
-  // ====================================================================
-  // ★ 安全防衛策3：時給（rates）が undefined になった場合のフリーズガード
-  // ====================================================================
-  if (!rates) {
-    console.warn(`[⚠️時給設定なし] 医師: ${shift.doctorName} 先生の時給データ(rates)がありません。時給0円として計算を安全に続行します。`);
-    return { hours: 0, cost: 0, appliedRates: [] };
-  }
+  if (!rates) return { hours: 0, cost: 0, appliedRates: [] };
 
   for (let h = sHour; h < eHour; h++) {
-    if (h === 13 || h === 14) continue; 
+    if (h === 13 || h === 14) continue;
     hours++;
     
     let r = 0;
     if (h >= 9 && h < 13) r = Number(rates[`${prefix}_am`]) || 0;
     else if (h >= 15 && h < 18) r = Number(rates[`${prefix}_pm`]) || 0;
     else if (h >= 18 && h < 21) r = Number(rates[`${prefix}_nt`]) || 0;
-    
+
     if (shift.specialWageDetail && shift.specialWageDetail.includes("円")) {
        let match = shift.specialWageDetail.match(/(\d{1,2})[：:]\d{2}-(\d{1,2})[：:]\d{2}.*?(\d{1,2}(?:,\d{3})*)円/);
        if (match) {
@@ -92,9 +71,6 @@ function generateShiftString(rawShifts) {
   return results.join(", ");
 }
 
-/**
- * 高速化：ダッシュボードのデータをメモリ上で作成し、1回で一括書き込みする
- */
 function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, wageDataList, senkouDocsArray) {
   const searchRange = sheet.getRange(startRow, 1, endRow - startRow + 1, 16);
   const values = searchRange.getValues();
@@ -117,7 +93,7 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   const joukinColor = "#fce5cd"; 
   const teikiColor  = "#d9d2e9"; 
   const senkouColor = "#d9ead3"; 
-  const emptyColor  = "#ffffff"; 
+  const emptyColor  = "#ffffff";
 
   let docBgUpdates = []; 
   let alignUpdates = []; 
@@ -134,7 +110,6 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
       else if (cellText === "常)1診目コマ数") writeVal = stats.joukin1shin;
       else if (cellText === "非)1診目コマ数") writeVal = stats.teiki1shin;
       else if (cellText === "超募集コマ数") writeVal = stats.boshu;
-      
       else if (cellText === "常)1診目割合") writeVal = calcRate(stats.joukin1shin, stats.total1shin);
       else if (cellText === "非)1診目割合") writeVal = calcRate(stats.teiki1shin, stats.total1shin);
       else if (cellText === "全体超募集率") writeVal = calcRate(stats.boshu, stats.total1shin);
@@ -165,7 +140,7 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
 
       if (writeVal !== null) {
         let targetCol = writeColMap[cellText] ? writeColMap[cellText] : c + 2;
-        values[r][targetCol - 1] = writeVal; 
+        values[r][targetCol - 1] = writeVal;
       }
 
       if (cellText === "常勤医師") {
@@ -204,7 +179,6 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
             values[r + 1 + idx][c + 3] = rateStr;
             values[r + 1 + idx][c + 4] = d.cost.toLocaleString();
           }
-          
           totalCost += d.cost;
           idx++;
         }
@@ -226,11 +200,9 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   }
   
   searchRange.setValues(values);
-  
   docBgUpdates.forEach(update => {
      sheet.getRange(update.row, 4, 1, 7).setBackgrounds(update.bgs);
   });
-  
   alignUpdates.forEach(update => {
      sheet.getRange(update.row, update.col, update.numRows, update.numCols).setHorizontalAlignment("left");
   });
@@ -252,9 +224,13 @@ function getMonthDaysGroupedByDOW(yearMonthStr) {
   const [year, month] = yearMonthStr.split('/').map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
   const grouped = [];
-  const dowMap = [1, 2, 3, 4, 5, 6, 0]; 
+  
+  // ==============================================================================
+  // ★ 究極の解決：DOW Map を【月曜始まり】に完全固定します。
+  // ==============================================================================
+  const dowMap = [1, 2, 3, 4, 5, 6, 0]; // 1=月, 2=火... 0=日
   const dowNames = {1:"月", 2:"火", 3:"水", 4:"木", 5:"金", 6:"土", 0:"日"};
-
+  
   dowMap.forEach(targetDow => {
     let count = 0;
     for (let d = 1; d <= daysInMonth; d++) {

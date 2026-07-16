@@ -2,8 +2,7 @@
  * ==========================================
  * 04A_Render_Main.gs
  * テンプレートの複製・メイン描画・パッチデータ適用（★ダッシュボード重複防止・専門科目判定完全版）
- * 【究極のピンポイントセル更新 ＆ 白紙化絶対防御版】
- * 既存の箱・数式・書式を1ミリも傷つけず、変更があったセルだけを狙い撃ちで書き換える
+ * 【究極のハイブリッド版：新規月は一括爆速展開 / 既存月はピンポイント狙い撃ち】
  * ==========================================
  */
 
@@ -390,33 +389,41 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   }
 
   // ==============================================================================
-  // 🎯【完全ピンポイント変更】メモリ上での間違い探し ＆ セル単体への setValue 狙い撃ち
+  // 🎯【最強のハイブリッド同期】新規作成は一括爆速、既存シートはピンポイントで数式を保護
   // ==============================================================================
-  let modifyCellCount = 0;
-  for (let r = 0; r < writeValues.length; r++) {
-    for (let c = 0; c < 12; c++) {
-      let currentCellVal = String(currentSheetValues[r][c]);
-      let expectedCellVal = String(writeValues[r][c]);
-      
-      // 文字が違う、または新規ブロック展開時のみピンポイント書き込み（それ以外は一切触らない）
-      if (currentCellVal !== expectedCellVal || isNewBlock) {
-        let cellRange = sheet.getRange(startRow + 19 + r, 4 + c);
+  if (isNewBlock) {
+    // 【新規月】720回の通信はタイムアウトを引き起こすため、1回の通信でバサッと被せる（超爆速）
+    targetRange.setValues(writeValues)
+               .setBackgrounds(writeBgs)
+               .setFontColors(writeFonts)
+               .setDataValidations(writeRules)
+               .setHorizontalAlignment("left");
+    console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 新規月のため、一括で爆速展開しました。`);
+  } else {
+    // 【既存月】既存のカレンダーの箱（数式や手入力）を守るため、変更があったセルだけを狙い撃ち
+    let modifyCellCount = 0;
+    for (let r = 0; r < writeValues.length; r++) {
+      for (let c = 0; c < 12; c++) {
+        let currentCellVal = String(currentSheetValues[r][c]);
+        let expectedCellVal = String(writeValues[r][c]);
         
-        cellRange.setValue(expectedCellVal)
-                 .setBackground(writeBgs[r][c])
-                 .setFontColor(writeFonts[r][c]);
-        
-        // プルダウンルールがない、または新規作成時のみ入力規則をセット（既存設定のフリーズを回避）
-        if (isNewBlock || !currentSheetValidations[r][c]) {
-          cellRange.setDataValidation(writeRules[r][c]);
+        if (currentCellVal !== expectedCellVal) {
+          let cellRange = sheet.getRange(startRow + 19 + r, 4 + c);
+          
+          cellRange.setValue(expectedCellVal)
+                   .setBackground(writeBgs[r][c])
+                   .setFontColor(writeFonts[r][c]);
+          
+          if (!currentSheetValidations[r][c]) {
+            cellRange.setDataValidation(writeRules[r][c]);
+          }
+          modifyCellCount++;
         }
-        modifyCellCount++;
       }
     }
-  }
-  
-  if (modifyCellCount > 0) {
-    console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 変更のあった ${modifyCellCount} マスのみをピンポイントでプルダウン同期しました（無駄な上書きゼロ）。`);
+    if (modifyCellCount > 0) {
+      console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 変更のあった ${modifyCellCount} マスのみをピンポイントでプルダウン同期しました（無駄な上書きゼロ）。`);
+    }
   }
 
   if (typeof writeDashboardInfo === 'function') {
@@ -428,6 +435,16 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     // 新規ブロック追加時のみ同期
   }
   
+  // ★ 追加：既存シートの更新が終わった際に、下部に残ったゴミ行を掃除する
+  if (!isNewBlock) {
+    let currentMaxRow = sheet.getMaxRows();
+    let currentLastRow = sheet.getLastRow();
+    // もしデータのある最終行より下に5行以上の無駄な余白があれば削る
+    if (currentMaxRow > currentLastRow + 5) {
+      sheet.deleteRows(currentLastRow + 6, currentMaxRow - currentLastRow - 5);
+    }
+  }
+
   SpreadsheetApp.flush();
   return true; 
 }
