@@ -3,6 +3,7 @@
  * 04A_Render_Main.gs
  * テンプレートの複製・メイン描画・パッチデータ適用（★ダッシュボード重複防止・専門科目判定完全版）
  * 【究極のハイブリッド版：新規月は一括爆速展開 / 既存月はピンポイント狙い撃ち】
+ * ★ 白紙化・完全遮断パッチ適用（データ取得完了後にのみシートを作成）
  * ==========================================
  */
 
@@ -133,6 +134,20 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     return false; 
   }
 
+  // ==============================================================================
+  // 🚨【白紙化・完全遮断パッチ】
+  // シートを作成（insertSheet）する前に、通信エラーが起きやすい外部データの取得をすべて済ませる。
+  // ここでタイムアウトが起きても、シートは作られていないため「白紙のゴミ」は絶対に生まれない。
+  // ==============================================================================
+  if (!globalWageCache[cleanLocName]) {
+    globalWageCache[cleanLocName] = typeof getClinicWages === 'function' ? getClinicWages(cleanLocName) : [];
+  }
+  const wageDataList = globalWageCache[cleanLocName];
+  let overrides = getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr);
+  
+  // ------------------------------------------------------------------------------
+  // 外部データの取得が無事に完了した！ここで初めて安全にシートを作成・操作する。
+  // ------------------------------------------------------------------------------
   let sheet = ss.getSheetByName(finalSheetName);
   let isNewBlock = false;
   if (!sheet) {
@@ -178,11 +193,8 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     sheet.getRange(blockEndRow, 1, 1, 16).setBorder(null, null, true, null, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
   }
 
-  if (!globalWageCache[cleanLocName]) globalWageCache[cleanLocName] = typeof getClinicWages === 'function' ? getClinicWages(cleanLocName) : [];
-  const wageDataList = globalWageCache[cleanLocName];
   let stats = typeof initStats === 'function' ? initStats() : {}; 
   let doctorCosts = {};
-  let overrides = getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr);
 
   if (typeof _debug_initHolidayMap === "function") _debug_initHolidayMap(yStr);
 

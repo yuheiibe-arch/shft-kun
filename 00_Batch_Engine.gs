@@ -4,6 +4,8 @@
  * バックグラウンドのバッチ処理・キュー管理
  * ★【究極のタイムアウト対策＆白紙化防止版】
  * 強制セーブ(Flush)・フライング防止・開院日スキップ解除パッチ適用版
+ * ★ 誤爆絶対防衛ガード適用（管理用・機能用シートの混入を完全ブロック）
+ * ★【究極のV8メモリパンク対策】限界時間を1.5分に短縮しINTERNALエラーを根絶
  * ==========================================
  */
 
@@ -14,6 +16,26 @@ function startBackgroundBatch(payload) {
   if (!payload || !payload.locations || payload.locations.length === 0) {
     return "Error: Locations Empty";
   }
+
+  // =========================================================
+  // 🛡️【誤爆絶対防衛ガード・強化版】
+  // ご提示いただいた「その他目次」にある管理用・機能用シートを完全に網羅。
+  // リストにこれらの単語が部分一致でも含まれていた場合、強制的に除外します。
+  // =========================================================
+  payload.locations = payload.locations.filter(loc => {
+    let invalidWords = [
+      "その他", "キャッシュ", "作業表", "お休み", "確定シフト", 
+      "欠勤", "キャンセル", "手順書", "原本", "振替勤務", 
+      "先行応募", "単独募集", "定期募集", "目次", "設定", 
+      "テンプレート", "ダッシュボード"
+    ];
+    return !invalidWords.some(word => loc.includes(word));
+  });
+
+  if (payload.locations.length === 0) {
+    return "Error: 有効な出力対象拠点がありませんでした。（すべて管理用シートとして除外されました）";
+  }
+  // =========================================================
 
   payload.totalCount = payload.locations.length;
   payload.completedCount = 0;
@@ -61,8 +83,12 @@ function startBackgroundBatch(payload) {
 
 function processBatchQueue() {
   const BATCH_START_TIME = Date.now();
-  // ★修正：GoogleサーバーのINTERNALエラー（パンク）を防ぐため、連続処理の限界を 4.5分 -> 3分(180000) に短縮
-  const SAFE_TIME_LIMIT = 180000; 
+  
+  // =========================================================
+  // ★ 大修正：INTERNALエラー（V8メモリパンク）を完全に防ぐため、
+  // 連続稼働の限界を 180000(3分) → 90000(1.5分) に超短縮！
+  // =========================================================
+  const SAFE_TIME_LIMIT = 90000; 
 
   deleteTriggers(); 
   const props = PropertiesService.getScriptProperties();
@@ -173,6 +199,7 @@ function processBatchQueue() {
   // ★ 連続描画ループ
   // =========================================================
   while (queue.currentMonthIndex < targetMonths.length) {
+    // 短縮した安全装置で、限界が来る前に早めにバトンを渡す
     if (Date.now() - BATCH_START_TIME > SAFE_TIME_LIMIT) {
       props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
       ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
@@ -225,6 +252,7 @@ function processBatchQueue() {
         finalSheet.deleteRows(finalLastRow + 6, finalMaxRow - finalLastRow - 5);
       }
 
+      // ★ この処理が完了することで、赤い三角が消え、背景色が塗られます
       safeExecute(() => syncSheetIndependent(finalSheet), 3, "書式・プルダウン同期");
       
       if (typeof computeStableHash === 'function') {
@@ -274,7 +302,6 @@ function _saveBatchCache(ss, dataObj) {
   }
   if (chunks.length > 0) {
     sheet.getRange(1, 1, chunks.length, 1).setValues(chunks);
-    // ★修正3：Googleに「完全に文字を書き込み終わるまでシステムを待機させろ」と強制命令を出す
     SpreadsheetApp.flush(); 
   }
 }
@@ -333,7 +360,7 @@ function getClinicOpeningDates(ss) {
 }
 
 // =========================================================
-// ★ 専門科目マスタの取得（空白除去漏れ・完全修正パッチ適用済）
+// ★ 専門科目マスタの取得
 // =========================================================
 function buildDoctorSpecialtyMap(year) {
   const masterUrl = 'https://docs.google.com/spreadsheets/d/1aEjphEv_63SeWQmwiOy9sx7IrMfawU01sHbKd_Ki4iA/edit';
@@ -343,16 +370,13 @@ function buildDoctorSpecialtyMap(year) {
     ["常勤", "定期非常勤"].forEach(type => {
       const sheet = masterSs.getSheetByName(`${type}${year}年度`);
       if (sheet) {
-        const data = sheet.getDataRange().getValues();
+        const data = masterSs.getSheetByName(`${type}${year}年度`).getDataRange().getValues();
         if (data.length < 2) return;
         const nameIdx = data[0].indexOf("医師名");
         const subjIdx = data[0].findIndex(h => String(h).includes("専門") || String(h).includes("科目"));
         if (nameIdx !== -1 && subjIdx !== -1) {
           for (let r = 1; r < data.length; r++) {
-            
-            // ★ 名前の全角・半角スペースを完全に除去
-            let docName = String(data[r][nameIdx]).replace(/先生$/, "").replace(/[\s ]+/g, "").trim();
-            
+            let docName = String(data[r][nameIdx]).replace(/先生$/, "").replace(/[\s  ]+/g, "").trim();
             let spec = String(data[r][subjIdx]).trim();
             if (docName) {
               if (spec.includes("内科")) map[docName] = "内科";
