@@ -8,6 +8,10 @@
  * ★【究極のV8メモリパンク対策】限界時間を1.5分に短縮しINTERNALエラーを根絶
  * ★【単一ターゲット・ステルス化】全シート走査・行削除・強制セーブの完全排除
  * ★【定期シフト】内科・小児科の絶対分類ルール完全適用版
+ * ★【ゴミシート完全排除】タイムアウト連鎖遮断＆自動削除パッチ適用版
+ * ★【APIデッドロック回避】トリガー間隔を10秒に延長しGoogleサーバーのロックを解除
+ * ★【スマート・トリミング】描画完了時に余白3行を残して不要な空白行を自動削除
+ * ★【二次災害防止＆リトライ】タイムアウト後のクラッシュ防衛と自動再挑戦機構
  * ==========================================
  */
 
@@ -76,8 +80,8 @@ function startBackgroundBatch(payload) {
     return "Error: " + e.message;
   }
   
-  // ★修正1：Googleの書き込み完了を待つため、1秒 → 5秒に変更
-  ScriptApp.newTrigger('processBatchQueue').timeBased().after(5000).create();
+  // ★修正：Googleの書き込み完了（ロック解除）を待つため 10秒(10000ms) に延長
+  ScriptApp.newTrigger('processBatchQueue').timeBased().after(10000).create();
   return "Success";
 }
 
@@ -125,6 +129,8 @@ function processBatchQueue() {
   const sheetExists = ss.getSheetByName(finalSheetName) !== null;
 
   if (queue.currentMonthIndex === undefined) queue.currentMonthIndex = 0;
+  // リトライカウントの初期化
+  if (queue.retryCount === undefined) queue.retryCount = 0;
 
   // =========================================================
   // ★ マスタから開院日を取得し、時間軸フィルターをかける
@@ -142,7 +148,6 @@ function processBatchQueue() {
      for (let m = 1; m <= 3; m++) baseMonths.push(`${nextYear}/${('0' + m).slice(-2)}`);
   }
 
-  // ★修正2：開院日が空欄（未設定）の場合は「開院済み」とみなして全期間を出力する
   let targetMonths = baseMonths;
 
   if (clinicOpenDate) {
@@ -154,7 +159,6 @@ function processBatchQueue() {
     });
   }
 
-  // 既存シートがある場合は「過去の月」を上書きしないよう、現在月以降に絞る
   if (sheetExists) {
     let currentYearMonthVal = (currentYearNum * 100) + currentMonthNum;
     targetMonths = targetMonths.filter(monthStr => {
@@ -164,16 +168,13 @@ function processBatchQueue() {
     });
   }
 
-  // =========================================================
-  // ★ キャッシュから爆速でデータを読み込む（外部通信ゼロ！）
-  // =========================================================
   let cached = _loadBatchCache(ss);
   if (!cached) {
     console.error(`[致命的エラー] キャッシュの読み込みに失敗。白紙化を防ぐためスキップします。`);
     queue.locations.shift();
     queue.currentMonthIndex = 0;
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-    ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
+    ScriptApp.newTrigger('processBatchQueue').timeBased().after(10000).create();
     return;
   }
 
@@ -186,6 +187,7 @@ function processBatchQueue() {
   let targetCat = subLocName.includes("内科") ? "内科" : (subLocName.includes("小児科") ? "小児科" : "");
 
   let isRenderedAny = false;
+  let isTimeoutOccurred = false; 
 
   if (queue.currentMonthIndex === 0 && typeof updateProgressMonitor === 'function') {
     let msg = targetMonths.length > 0 ?
@@ -194,13 +196,10 @@ function processBatchQueue() {
     updateProgressMonitor(ss, queue.completedCount, queue.totalCount, remainMin, msg);
   }
 
-  // =========================================================
-  // ★ 連続描画ループ
-  // =========================================================
   while (queue.currentMonthIndex < targetMonths.length) {
     if (Date.now() - BATCH_START_TIME > SAFE_TIME_LIMIT) {
       props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-      ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
+      ScriptApp.newTrigger('processBatchQueue').timeBased().after(10000).create();
       return; 
     }
 
@@ -211,59 +210,94 @@ function processBatchQueue() {
       for (let dStr in originalDataForMonth) {
         let shifts = originalDataForMonth[dStr];
         
-        // =========================================================
-        // ★修正：定期シフト側にも「内科明記の絶対ルール」を完全適用
-        // =========================================================
         if (isSplitTarget && targetCat) {
           let otherCat = targetCat === "内科" ? "小児科" : "内科";
           shifts = shifts.filter(s => {
             let docSpec = specialtyMap[s.doctorName] || "不明";
             let text = s.rawShift || "";
-            
             let isBoxMatch = text.includes(targetCat);
             let isOtherBoxMatch = text.includes(otherCat);
             let isSubjectMatch = docSpec.includes(targetCat);
             let isOtherSubjectMatch = docSpec.includes(otherCat);
             
-            // 1. まず内科(小児科)等と記載があるか
-            if (isOtherBoxMatch && !isBoxMatch) {
-              return false; // 明確に別の科目が書かれているなら除外
-            } else if (isBoxMatch) {
-              return true; // 明記されているならそのまま通す
-            } else {
-              // 2. 記載がないならマスタに問い合わせる
+            if (isOtherBoxMatch && !isBoxMatch) return false; 
+            else if (isBoxMatch) return true; 
+            else {
               if (targetCat === "内科") {
-                if (!isSubjectMatch) return false; // マスタが「内科」でないなら小児科と判断し除外
+                if (!isSubjectMatch) return false; 
               } else {
-                if (isOtherSubjectMatch) return false; // マスタが明確に「内科」なら小児科から除外
+                if (isOtherSubjectMatch) return false; 
               }
               return true;
             }
           });
         }
-        // =========================================================
-
         if (shifts.length > 0) filteredDataForMonth[dStr] = shifts;
       }
 
-      // ★ 描画処理
       const isRendered = renderShiftBlock(ss, subLocName, finalSheetName, yearMonthStr, filteredDataForMonth, targetTerm);
-      if (isRendered) isRenderedAny = true;
+      if (isRendered) {
+        isRenderedAny = true;
+        queue.retryCount = 0; // 成功したらリセット
+      }
       
     } catch(e) {
       console.error(`[エラー] ${subLocName} (${yearMonthStr}): ${e.message}`);
+      if (e.message.includes("タイムアウト") || e.message.includes("timeout") || e.message.includes("Timeout")) {
+        isTimeoutOccurred = true;
+        break; 
+      }
     }
 
     queue.currentMonthIndex++;
   }
 
   // =========================================================
-  // ★ 1拠点完了時の処理
+  // ★ ゴミ掃除 ＆ リトライ処理（二次災害の完全ブロック）
+  // =========================================================
+  if (isTimeoutOccurred) {
+    queue.retryCount = (queue.retryCount || 0) + 1;
+    console.warn(`🚨 タイムアウト検知: ${subLocName} の処理を一時中断します。(リトライ: ${queue.retryCount}回目)`);
+    
+    // 二次災害（クラッシュ）を防ぐバリア
+    try {
+      if (!isRenderedAny) {
+        let garbageSheet = ss.getSheetByName(finalSheetName);
+        if (garbageSheet) ss.deleteSheet(garbageSheet);
+      }
+    } catch (e2) {
+      console.warn("通信遮断状態のためゴミ削除をスキップしました（クラッシュ回避）。");
+    }
+
+    // 2回までは同じ月をリトライする。3回目で諦めてスキップする。
+    if (queue.retryCount > 2) {
+      console.error(`❌ リトライ上限到達: ${subLocName} を諦めてスキップします。`);
+      queue.locations.shift();
+      queue.currentMonthIndex = 0;
+      queue.retryCount = 0;
+    }
+    
+    props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
+    // バックグラウンドの通信詰まりを解消するため長めに深呼吸
+    ScriptApp.newTrigger('processBatchQueue').timeBased().after(15000).create();
+    return;
+  }
+
+  // =========================================================
+  // ★ 1拠点完了時
   // =========================================================
   if (queue.currentMonthIndex >= targetMonths.length) {
     let finalSheet = ss.getSheetByName(finalSheetName);
     if (finalSheet && isRenderedAny) {
+      
       if (finalSheet.getMaxColumns() > 16) finalSheet.deleteColumns(17, finalSheet.getMaxColumns() - 16);
+      
+      let lastDataRow = finalSheet.getLastRow();
+      let maxSheetRows = finalSheet.getMaxRows();
+      let targetMaxRows = lastDataRow + 3;
+      if (maxSheetRows > targetMaxRows) {
+        finalSheet.deleteRows(targetMaxRows + 1, maxSheetRows - targetMaxRows);
+      }
       
       safeExecute(() => syncSheetIndependent(finalSheet), 3, "書式・プルダウン同期");
       
@@ -275,12 +309,13 @@ function processBatchQueue() {
 
     queue.locations.shift(); 
     queue.currentMonthIndex = 0;
+    queue.retryCount = 0;
     queue.completedCount++;
   }
 
   if (queue.locations.length > 0) {
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-    ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
+    ScriptApp.newTrigger('processBatchQueue').timeBased().after(10000).create();
   } else {
     if (typeof updateProgressMonitor === 'function') {
       updateProgressMonitor(ss, queue.totalCount, queue.totalCount, 0, "🎉 すべての出力が正常に完了しました！");
@@ -288,7 +323,6 @@ function processBatchQueue() {
     queue.status = "COMPLETED";
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
 
-    // ★ 完了後にキャッシュシートをお掃除
     let cacheSheet = ss.getSheetByName("⚙️通信キャッシュ");
     if (cacheSheet) ss.deleteSheet(cacheSheet);
   }

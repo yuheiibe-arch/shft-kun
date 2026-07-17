@@ -5,6 +5,8 @@
  * ★ 曜日・週番号の書き込み爆速化（API通信削減）パッチ適用版
  * ★【先行応募・振替等】マスタ判定維持 ＆ 不明時の忖度（両方出力）完全排除版
  * ★【原点回帰】初期キャンバス1200行拡張 ＆ 1マスずつの通信を完全廃止した一括バッチ上書き版
+ * ★【限界突破】1ヶ月描画ごとの強制Flush追加（メモリパンク・タイムアウト完全防衛版）
+ * ★【ゴミ排除】新規シートを必ず「末尾」に作成する強制パッチ適用
  * ==========================================
  */
 
@@ -146,7 +148,8 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   let isNewBlock = false;
   
   if (!sheet) {
-    sheet = ss.insertSheet(finalSheetName);
+    // ★ ゴミが途中に挟まらないよう、必ずシートの「末尾（一番右）」に追加する
+    sheet = ss.insertSheet(finalSheetName, ss.getSheets().length);
     isNewBlock = true;
 
     // =========================================================
@@ -432,7 +435,9 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     writeDashboardInfo(sheet, startRow, blockEndRow, edges, stats, doctorCosts, wageDataList, Array.from(overrides.senkouDocs));
   }
   
-  // SpreadsheetApp.flush(); // 強制セーブによるファイル全体への負荷をなくすため削除済み
+  // ★【限界突破パッチ】キューのパンクを防ぐため、1ヶ月（1ブロック）ごとに必ず強制セーブ（息継ぎ）を行う
+  SpreadsheetApp.flush(); 
+
   return true; 
 }
 
