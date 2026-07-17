@@ -3,6 +3,7 @@
  * 04B_Render_Calc.gs
  * コスト計算・ダッシュボード書き込み・統計初期化
  * ★月曜始まり完全固定パッチ（曜日ズレ最終解決版）
+ * ★ダッシュボード12名（D〜O列）完全拡張版
  * ==========================================
  */
 
@@ -143,22 +144,23 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
         values[r][targetCol - 1] = writeVal;
       }
 
+      // ★ 修正箇所: 配列数とループ上限を12に変更
       if (cellText === "常勤医師") {
         let docs = Array.from(stats.uniqueJoukin);
-        let bgs = new Array(7).fill(emptyColor);
-        for (let i = 0; i < docs.length && i < 7; i++) { values[r][3 + i] = docs[i]; bgs[i] = joukinColor; }
+        let bgs = new Array(12).fill(emptyColor);
+        for (let i = 0; i < docs.length && i < 12; i++) { values[r][3 + i] = docs[i]; bgs[i] = joukinColor; }
         docBgUpdates.push({row: startRow + r, bgs: [bgs]});
       }
       if (cellText === "非常勤医師") {
         let docs = Array.from(stats.uniqueTeiki);
-        let bgs = new Array(7).fill(emptyColor);
-        for (let i = 0; i < docs.length && i < 7; i++) { values[r][3 + i] = docs[i]; bgs[i] = teikiColor; }
+        let bgs = new Array(12).fill(emptyColor);
+        for (let i = 0; i < docs.length && i < 12; i++) { values[r][3 + i] = docs[i]; bgs[i] = teikiColor; }
         docBgUpdates.push({row: startRow + r, bgs: [bgs]});
       }
       if (cellText === "先行応募" || cellText === "先行応募医師") {
         let docs = senkouDocsArray;
-        let bgs = new Array(7).fill(emptyColor);
-        for (let i = 0; i < docs.length && i < 7; i++) { values[r][3 + i] = docs[i]; bgs[i] = senkouColor; }
+        let bgs = new Array(12).fill(emptyColor);
+        for (let i = 0; i < docs.length && i < 12; i++) { values[r][3 + i] = docs[i]; bgs[i] = senkouColor; }
         docBgUpdates.push({row: startRow + r, bgs: [bgs]});
       }
 
@@ -201,7 +203,8 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   
   searchRange.setValues(values);
   docBgUpdates.forEach(update => {
-     sheet.getRange(update.row, 4, 1, 7).setBackgrounds(update.bgs);
+      // ★ 修正箇所: ここも幅を12列に拡張
+     sheet.getRange(update.row, 4, 1, 12).setBackgrounds(update.bgs);
   });
   alignUpdates.forEach(update => {
      sheet.getRange(update.row, update.col, update.numRows, update.numCols).setHorizontalAlignment("left");
@@ -225,10 +228,7 @@ function getMonthDaysGroupedByDOW(yearMonthStr) {
   const daysInMonth = new Date(year, month, 0).getDate();
   const grouped = [];
   
-  // ==============================================================================
-  // ★ 究極の解決：DOW Map を【月曜始まり】に完全固定します。
-  // ==============================================================================
-  const dowMap = [1, 2, 3, 4, 5, 6, 0]; // 1=月, 2=火... 0=日
+  const dowMap = [1, 2, 3, 4, 5, 6, 0];
   const dowNames = {1:"月", 2:"火", 3:"水", 4:"木", 5:"金", 6:"土", 0:"日"};
   
   dowMap.forEach(targetDow => {

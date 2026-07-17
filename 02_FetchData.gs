@@ -3,6 +3,7 @@
  * 02_FetchData.gs
  * 外部シートからのデータ取得・解析・構造化
  * ★空白除去＆完全同一人物認識・強化版
+ * ★セル内改行（複数シフト）の完全読み取り対応版
  * ==========================================
  */
 
@@ -18,9 +19,6 @@ function fetchAndOrganizeData(year, term, targetLocations) {
   };
 }
 
-/**
- * 「常勤〇〇年度」「定期非常勤〇〇年度」から医師の基本情報を取得
- */
 function fetchDoctorMaster(extSs, year) {
   const master = {};
   const types = ["常勤", "定期非常勤"];
@@ -51,13 +49,10 @@ function fetchDoctorMaster(extSs, year) {
       let rawName = String(data[r][nameIdx]);
       if (!rawName) continue;
       
-      // ★超重要: どんな空白が紛れ込んでいても完全に削除してキーにする
-      const docNameClean = rawName.replace(/[\s　]+/g, "").replace(/先生$/, "");
+      const docNameClean = rawName.replace(/[\s ]+/g, "").replace(/先生$/, "");
       
       master[docNameClean] = {
         name: docNameClean, 
-        // ★修正: 描画時にも「空白を除去した綺麗な名前」を強制的に使わせることで、
-        // 別の場所（先行応募など）から来た空白入りの名前と必ず一致させる
         originalName: docNameClean, 
         type: type,
         contractType: type, 
@@ -74,9 +69,6 @@ function fetchDoctorMaster(extSs, year) {
   return master;
 }
 
-/**
- * 「勤怠〇〇」シートから、指定拠点・指定期間のシフトを抽出
- */
 function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locationDict) {
   let shiftData = {};
   targetLocations.forEach(loc => { shiftData[loc] = {}; });
@@ -98,7 +90,7 @@ function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locat
     let dateRowIdx = -1;
     for (let r = 0; r < 3; r++) {
       for (let c = 0; c < 5; c++) {
-        if (String(data[r][c]).replace(/[\s　]+/g, "").includes("日付")) {
+        if (String(data[r][c]).replace(/[\s ]+/g, "").includes("日付")) {
           dateIdx = c;
           dateRowIdx = r;
           break;
@@ -114,8 +106,7 @@ function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locat
     let nameRowIdx = dateRowIdx > 0 ? dateRowIdx - 1 : 0;
     
     for (let c = dateIdx + 1; c < data[nameRowIdx].length; c++) {
-      // ヘッダー（医師名）から空白を完全除去
-      let docName = String(data[nameRowIdx][c] || "").replace(/[\s　]+/g, "").replace(/先生$/, ""); 
+      let docName = String(data[nameRowIdx][c] || "").replace(/[\s ]+/g, "").replace(/先生$/, ""); 
       if (docName && !excludeHeaders.includes(docName) && isNaN(Number(docName))) { 
         doctorCols.push({ index: c, name: docName });
       }
@@ -153,61 +144,64 @@ function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locat
         const cellVal = row[doc.index];
         if (!cellVal || String(cellVal).trim() === "" || String(cellVal).trim() === "休") return;
         
-        const shiftStr = String(cellVal).trim();
+        const rawCellText = String(cellVal).trim();
+        const lines = rawCellText.split(/\r\n|\n|\r/);
         
-        const timeMatch = shiftStr.match(/([0-9]{1,2})[:：]?([0-9]{2})?\s*[-~～]\s*([0-9]{1,2})[:：]?([0-9]{2})?/);
-        if (!timeMatch) return;
-        
-        const startH = parseInt(timeMatch[1], 10);
-        const startM = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-        const endH = parseInt(timeMatch[3], 10);
-        const endM = timeMatch[4] ? parseInt(timeMatch[4], 10) : 0;
+        lines.forEach(shiftStr => {
+          shiftStr = shiftStr.trim();
+          if (!shiftStr || shiftStr === "休") return;
+          
+          const timeMatch = shiftStr.match(/([0-9]{1,2})[:：]?([0-9]{2})?\s*[-~～]\s*([0-9]{1,2})[:：]?([0-9]{2})?/);
+          if (!timeMatch) return;
+          
+          const startH = parseInt(timeMatch[1], 10);
+          const startM = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+          const endH = parseInt(timeMatch[3], 10);
+          const endM = timeMatch[4] ? parseInt(timeMatch[4], 10) : 0;
 
-        if (isNaN(startH) || isNaN(endH)) return;
+          if (isNaN(startH) || isNaN(endH)) return;
 
-        const startTime = `${('0' + startH).slice(-2)}:${('0' + startM).slice(-2)}`;
-        const endTime = `${('0' + endH).slice(-2)}:${('0' + endM).slice(-2)}`;
-        
-        let cleanLoc = null;
-        const bracketMatch = shiftStr.match(/【(.*?)】/);
-        if (bracketMatch && bracketMatch[1].trim() !== "") {
-          cleanLoc = normalizeLocationName(bracketMatch[1].trim(), locationDict);
-        } else {
-          for (const loc of targetLocations) {
-            if (shiftStr.includes(loc)) {
-              cleanLoc = loc;
-              break;
+          const startTime = `${('0' + startH).slice(-2)}:${('0' + startM).slice(-2)}`;
+          const endTime = `${('0' + endH).slice(-2)}:${('0' + endM).slice(-2)}`;
+          
+          let cleanLoc = null;
+          const bracketMatch = shiftStr.match(/【(.*?)】/);
+          if (bracketMatch && bracketMatch[1].trim() !== "") {
+            cleanLoc = normalizeLocationName(bracketMatch[1].trim(), locationDict);
+          } else {
+            for (const loc of targetLocations) {
+              if (shiftStr.includes(loc)) {
+                cleanLoc = loc;
+                break;
+              }
+            }
+            if (!cleanLoc) {
+              const strWithoutTime = shiftStr.replace(timeMatch[0], '').trim();
+              cleanLoc = normalizeLocationName(strWithoutTime, locationDict);
             }
           }
-          if (!cleanLoc) {
-            const strWithoutTime = shiftStr.replace(timeMatch[0], '').trim();
-            cleanLoc = normalizeLocationName(strWithoutTime, locationDict);
+          
+          if (!cleanLoc || !targetLocations.includes(cleanLoc)) return;
+          
+          if (!shiftData[cleanLoc][dateStr]) {
+            shiftData[cleanLoc][dateStr] = [];
           }
-        }
-        
-        if (!cleanLoc || !targetLocations.includes(cleanLoc)) return;
-        
-        if (!shiftData[cleanLoc][dateStr]) {
-          shiftData[cleanLoc][dateStr] = [];
-        }
-        
-        let docMasterEntry = doctorMaster[doc.name];
-        
-        // ★修正: データとして保持する名前も、スペースを完全に消去した「綺麗な名前」に統一する
-        // これにより、後続の描画処理（先行応募との合体）で確実に「同一人物」と判定される
-        let finalDocName = docMasterEntry ? docMasterEntry.originalName : doc.name;
-        finalDocName = finalDocName.replace(/[\s　]+/g, "").replace(/先生$/, "");
-        
-        shiftData[cleanLoc][dateStr].push({
-          doctorName: finalDocName,
-          type: type,
-          startTime: startTime,
-          endTime: endTime,
-          startHour: startH,
-          hours: (endH - startH),
-          rawShift: shiftStr,
-          wageInfo: docMasterEntry ? docMasterEntry.wageInfo : "",
-          specialWageDetail: docMasterEntry ? docMasterEntry.specialWageDetail : ""
+          
+          let docMasterEntry = doctorMaster[doc.name];
+          let finalDocName = docMasterEntry ? docMasterEntry.originalName : doc.name;
+          finalDocName = finalDocName.replace(/[\s ]+/g, "").replace(/先生$/, "");
+          
+          shiftData[cleanLoc][dateStr].push({
+            doctorName: finalDocName,
+            type: type,
+            startTime: startTime,
+            endTime: endTime,
+            startHour: startH,
+            hours: (endH - startH),
+            rawShift: shiftStr,
+            wageInfo: docMasterEntry ? docMasterEntry.wageInfo : "",
+            specialWageDetail: docMasterEntry ? docMasterEntry.specialWageDetail : ""
+          });
         });
       });
     }

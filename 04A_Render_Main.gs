@@ -1,9 +1,8 @@
 /**
  * ==========================================
  * 04A_Render_Main.gs
- * テンプレートの複製・メイン描画・パッチデータ適用（★ダッシュボード重複防止・専門科目判定完全版）
- * 【究極のハイブリッド版：新規月は一括爆速展開 / 既存月はピンポイント狙い撃ち】
- * ★ 白紙化・完全遮断パッチ適用（データ取得完了後にのみシートを作成）
+ * テンプレートの複製・メイン描画・パッチデータ適用
+ * ★ 曜日・週番号の書き込み爆速化（API通信削減）パッチ適用版
  * ==========================================
  */
 
@@ -50,9 +49,6 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
       let doc = type === 'absence' ? (String(data[i][6]).trim() || String(data[i][5]).trim()) : String(data[i][5]).trim();
       doc = doc.replace(/[\s ]+/g, "").replace(/先生$/, "").trim();
 
-      // =========================================================
-      // ★大修正：先行応募・振替・お休みにもマスタ専門の判定ロジックを完全適用
-      // =========================================================
       if (originalLocName !== cleanLocName) {
         let targetCat = originalLocName.includes("内科") ? "内科" : "小児科";
         let otherCat = targetCat === "内科" ? "小児科" : "内科";
@@ -75,7 +71,6 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
           }
         }
       }
-      // =========================================================
       
       let sTime = String(data[i][2] instanceof Date ? Utilities.formatDate(data[i][2], Session.getScriptTimeZone(), "HH:mm") : data[i][2]);
       let eTime = String(data[i][3] instanceof Date ? Utilities.formatDate(data[i][3], Session.getScriptTimeZone(), "HH:mm") : data[i][3]);
@@ -134,20 +129,12 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     return false; 
   }
 
-  // ==============================================================================
-  // 🚨【白紙化・完全遮断パッチ】
-  // シートを作成（insertSheet）する前に、通信エラーが起きやすい外部データの取得をすべて済ませる。
-  // ここでタイムアウトが起きても、シートは作られていないため「白紙のゴミ」は絶対に生まれない。
-  // ==============================================================================
   if (!globalWageCache[cleanLocName]) {
     globalWageCache[cleanLocName] = typeof getClinicWages === 'function' ? getClinicWages(cleanLocName) : [];
   }
   const wageDataList = globalWageCache[cleanLocName];
   let overrides = getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr);
   
-  // ------------------------------------------------------------------------------
-  // 外部データの取得が無事に完了した！ここで初めて安全にシートを作成・操作する。
-  // ------------------------------------------------------------------------------
   let sheet = ss.getSheetByName(finalSheetName);
   let isNewBlock = false;
   if (!sheet) {
@@ -187,7 +174,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   if (isNewBlock) {
     tempRange.copyTo(sheet.getRange(startRow, 1));
-    // 新規作成時のみ、外枠の極太線を安全に設定
     const fullBlockRange = sheet.getRange(startRow, 1, tempRange.getNumRows(), 16);
     fullBlockRange.setBorder(true, true, true, true, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
     sheet.getRange(blockEndRow, 1, 1, 16).setBorder(null, null, true, null, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
@@ -211,9 +197,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     });
   });
 
-  // ==============================================================================
-  // ★ダッシュボード（ヘッダー）の重複防止フィルター
-  // ==============================================================================
   let filteredSenkouDocs = new Set();
   overrides.senkouDocs.forEach(doc => {
     let cleanDoc = doc.replace(/[\s ]+/g, "").replace(/先生$/, "").trim();
@@ -222,7 +205,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     }
   });
   overrides.senkouDocs = filteredSenkouDocs;
-  // ==============================================================================
 
   overrides.senkouDocs.forEach(doc => allDocsThisMonth.add(doc));
   overrides.substituteDocs.forEach(doc => allDocsThisMonth.add(doc));
@@ -232,7 +214,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   let currentRow = startRow + 19;
   
-  // 🚨【合理化の核心】現在のシートの値を1ヶ月分まるごと裏側（メモリ）にカンニング取得
   const targetRange = sheet.getRange(startRow + 19, 4, groupedDays.length * 2, 12);
   let currentSheetValues = targetRange.getValues();
   let currentSheetValidations = targetRange.getDataValidations();
@@ -242,14 +223,27 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   let writeFonts = [];
   let writeRules = [];
   
-  let actualShiftHasDoctorCount = 0; // 白紙化防止ガード用のドクター数カウント
+  let actualShiftHasDoctorCount = 0; 
 
-  groupedDays.forEach(dayInfo => {
-    // 枠組み（曜日や週番号）のセルが空のときだけ安全に書き込む（既存デザインの破壊を防止）
-    let dayCell = sheet.getRange(currentRow, 1);
-    if (!dayCell.getValue()) dayCell.setValue(dayInfo.dayOfWeek).setHorizontalAlignment("left");
-    let weekCell = sheet.getRange(currentRow, 2);
-    if (!weekCell.getValue()) weekCell.setValue(dayInfo.weekNum).setHorizontalAlignment("left");
+  // ==============================================================================
+  // ⚡【超絶爆速化パッチ】
+  // 曜日と週番号(A列とB列)の書き込みで発生していた140回の無駄なAPI通信を撲滅し、
+  // メモリ上で処理して最後に1回だけ書き込むように修正しました。
+  // ==============================================================================
+  const leftHeaderRange = sheet.getRange(startRow + 19, 1, groupedDays.length * 2, 2);
+  let leftHeaderValues = leftHeaderRange.getValues();
+  let leftHeaderModified = false;
+
+  groupedDays.forEach((dayInfo, dIdx) => {
+    let rIdx = dIdx * 2;
+    if (!leftHeaderValues[rIdx][0]) {
+      leftHeaderValues[rIdx][0] = dayInfo.dayOfWeek;
+      leftHeaderModified = true;
+    }
+    if (!leftHeaderValues[rIdx][1]) {
+      leftHeaderValues[rIdx][1] = dayInfo.weekNum;
+      leftHeaderModified = true;
+    }
     
     if (!dayInfo.isValid) {
       let emptyRow = new Array(12).fill("");
@@ -387,11 +381,11 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     currentRow += 2;
   });
 
-  // ==============================================================================
-  // 🚨【白紙化絶対ガード】通信エラーによる「偶然の白紙」を物理的に遮断するセキュリティロック
-  // 新規作成(isNewBlock=true)ではないのに、計算された配置ドクター数が「完全に0件」かつ、
-  // 元のシートにすでにドクター名が書かれていた場合は、データの「蒸発バグ」とみなして処理を即座に完全拒否する。
-  // ==============================================================================
+  // ★爆速化：ここで1回だけ曜日・週番号を書き込みます
+  if (leftHeaderModified) {
+    leftHeaderRange.setValues(leftHeaderValues).setHorizontalAlignment("left");
+  }
+
   if (!isNewBlock && actualShiftHasDoctorCount === 0) {
     let currentSheetHasDoctor = currentSheetValues.some(row => row.some(val => val && val !== "募集" && val !== "休" && val !== "休館日" && val !== "未開院" && val !== ""));
     if (currentSheetHasDoctor) {
@@ -400,11 +394,7 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     }
   }
 
-  // ==============================================================================
-  // 🎯【最強のハイブリッド同期】新規作成は一括爆速、既存シートはピンポイントで数式を保護
-  // ==============================================================================
   if (isNewBlock) {
-    // 【新規月】720回の通信はタイムアウトを引き起こすため、1回の通信でバサッと被せる（超爆速）
     targetRange.setValues(writeValues)
                .setBackgrounds(writeBgs)
                .setFontColors(writeFonts)
@@ -412,7 +402,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
                .setHorizontalAlignment("left");
     console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 新規月のため、一括で爆速展開しました。`);
   } else {
-    // 【既存月】既存のカレンダーの箱（数式や手入力）を守るため、変更があったセルだけを狙い撃ち
     let modifyCellCount = 0;
     for (let r = 0; r < writeValues.length; r++) {
       for (let c = 0; c < 12; c++) {
@@ -447,11 +436,9 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     // 新規ブロック追加時のみ同期
   }
   
-  // ★ 追加：既存シートの更新が終わった際に、下部に残ったゴミ行を掃除する
   if (!isNewBlock) {
     let currentMaxRow = sheet.getMaxRows();
     let currentLastRow = sheet.getLastRow();
-    // もしデータのある最終行より下に5行以上の無駄な余白があれば削る
     if (currentMaxRow > currentLastRow + 5) {
       sheet.deleteRows(currentLastRow + 6, currentMaxRow - currentLastRow - 5);
     }
