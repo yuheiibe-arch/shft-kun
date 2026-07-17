@@ -4,6 +4,7 @@
  * コスト計算・ダッシュボード書き込み・統計初期化
  * ★月曜始まり完全固定パッチ（曜日ズレ最終解決版）
  * ★ダッシュボード12名（D〜O列）完全拡張版
+ * ★【残存データ完全消去パッチ】ダッシュボード空欄のクリア処理を追加
  * ==========================================
  */
 
@@ -144,25 +145,39 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
         values[r][targetCol - 1] = writeVal;
       }
 
-      // ★ 修正箇所: 配列数とループ上限を12に変更
+      // =========================================================
+      // ★ 修正箇所: 枠が余った場合、古い名前が残らないよう「完全に空欄で上書き」する処理を追加
+      // =========================================================
       if (cellText === "常勤医師") {
         let docs = Array.from(stats.uniqueJoukin);
         let bgs = new Array(12).fill(emptyColor);
-        for (let i = 0; i < docs.length && i < 12; i++) { values[r][3 + i] = docs[i]; bgs[i] = joukinColor; }
+        for (let i = 0; i < 12; i++) { 
+          if (i < docs.length) { values[r][3 + i] = docs[i]; bgs[i] = joukinColor; }
+          else { values[r][3 + i] = ""; } // ★ 空欄で上書き消去
+        }
         docBgUpdates.push({row: startRow + r, bgs: [bgs]});
       }
+      
       if (cellText === "非常勤医師") {
         let docs = Array.from(stats.uniqueTeiki);
         let bgs = new Array(12).fill(emptyColor);
-        for (let i = 0; i < docs.length && i < 12; i++) { values[r][3 + i] = docs[i]; bgs[i] = teikiColor; }
+        for (let i = 0; i < 12; i++) { 
+          if (i < docs.length) { values[r][3 + i] = docs[i]; bgs[i] = teikiColor; }
+          else { values[r][3 + i] = ""; } // ★ 空欄で上書き消去
+        }
         docBgUpdates.push({row: startRow + r, bgs: [bgs]});
       }
+      
       if (cellText === "先行応募" || cellText === "先行応募医師") {
         let docs = senkouDocsArray;
         let bgs = new Array(12).fill(emptyColor);
-        for (let i = 0; i < docs.length && i < 12; i++) { values[r][3 + i] = docs[i]; bgs[i] = senkouColor; }
+        for (let i = 0; i < 12; i++) { 
+          if (i < docs.length) { values[r][3 + i] = docs[i]; bgs[i] = senkouColor; }
+          else { values[r][3 + i] = ""; } // ★ 空欄で上書き消去
+        }
         docBgUpdates.push({row: startRow + r, bgs: [bgs]});
       }
+      // =========================================================
 
       if (cellText === "医師名" && String(values[r][c+1]).trim() === "稼働時間") {
         let totalCost = 0;
@@ -203,7 +218,6 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   
   searchRange.setValues(values);
   docBgUpdates.forEach(update => {
-      // ★ 修正箇所: ここも幅を12列に拡張
      sheet.getRange(update.row, 4, 1, 12).setBackgrounds(update.bgs);
   });
   alignUpdates.forEach(update => {

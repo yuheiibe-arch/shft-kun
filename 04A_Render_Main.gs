@@ -3,6 +3,8 @@
  * 04A_Render_Main.gs
  * テンプレートの複製・メイン描画・パッチデータ適用
  * ★ 曜日・週番号の書き込み爆速化（API通信削減）パッチ適用版
+ * ★【先行応募・振替等】マスタ判定維持 ＆ 不明時の忖度（両方出力）完全排除版
+ * ★【原点回帰】初期キャンバス1200行拡張 ＆ 1マスずつの通信を完全廃止した一括バッチ上書き版
  * ==========================================
  */
 
@@ -63,11 +65,16 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
         if (isOtherBoxMatch && !isBoxMatch) {
           continue; 
         } else if (isBoxMatch) {
-          // 指定通りなのでそのまま通す
-        } 
-        else {
-          if (!isSubjectMatch && isOtherSubjectMatch) {
-            continue; 
+          // 通す
+        } else {
+          if (targetCat === "内科") {
+            if (!isSubjectMatch) {
+              continue; 
+            }
+          } else {
+            if (isOtherSubjectMatch) {
+              continue; 
+            }
           }
         }
       }
@@ -137,9 +144,26 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   let sheet = ss.getSheetByName(finalSheetName);
   let isNewBlock = false;
+  
   if (!sheet) {
-    sheet = ss.insertSheet(finalSheetName, ss.getNumSheets());
+    sheet = ss.insertSheet(finalSheetName);
     isNewBlock = true;
+
+    // =========================================================
+    // ★ 合理化パッチ①：初期キャンバス拡張
+    // 1000行で足りなくなることを見越し、最初から1200行に拡張しておく
+    // （これにより、ループ処理中の行追加による激重処理がゼロになります）
+    // =========================================================
+    let initialMaxCols = sheet.getMaxColumns();
+    if (initialMaxCols > 16) {
+      sheet.deleteColumns(17, initialMaxCols - 16);
+    }
+    
+    let currentMaxRows = sheet.getMaxRows();
+    if (currentMaxRows < 1200) {
+      sheet.insertRowsAfter(currentMaxRows, 1200 - currentMaxRows);
+    }
+    // =========================================================
   }
   
   const templateSheet = ss.getSheetByName(typeof CONFIG !== 'undefined' && CONFIG.TEMPLATE_SHEET_NAME ? CONFIG.TEMPLATE_SHEET_NAME : "テンプレート");
@@ -168,8 +192,10 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   let blockEndRow = startRow + tempRange.getNumRows() - 1;
   const requiredRows = blockEndRow + 10;
+  
+  // 1200行に拡張済みなので、ここはほぼ通過します（無駄な追加が起きない）
   if (sheet.getMaxRows() < requiredRows) {
-    sheet.insertRowsAfter(sheet.getMaxRows(), requiredRows - sheet.getMaxRows());
+    sheet.insertRowsAfter(sheet.getMaxRows(), Math.max(requiredRows - sheet.getMaxRows(), 100));
   }
   
   if (isNewBlock) {
@@ -216,7 +242,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   const targetRange = sheet.getRange(startRow + 19, 4, groupedDays.length * 2, 12);
   let currentSheetValues = targetRange.getValues();
-  let currentSheetValidations = targetRange.getDataValidations();
 
   let writeValues = [];
   let writeBgs = [];
@@ -225,11 +250,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   let actualShiftHasDoctorCount = 0; 
 
-  // ==============================================================================
-  // ⚡【超絶爆速化パッチ】
-  // 曜日と週番号(A列とB列)の書き込みで発生していた140回の無駄なAPI通信を撲滅し、
-  // メモリ上で処理して最後に1回だけ書き込むように修正しました。
-  // ==============================================================================
   const leftHeaderRange = sheet.getRange(startRow + 19, 1, groupedDays.length * 2, 2);
   let leftHeaderValues = leftHeaderRange.getValues();
   let leftHeaderModified = false;
@@ -381,7 +401,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     currentRow += 2;
   });
 
-  // ★爆速化：ここで1回だけ曜日・週番号を書き込みます
   if (leftHeaderModified) {
     leftHeaderRange.setValues(leftHeaderValues).setHorizontalAlignment("left");
   }
@@ -394,57 +413,26 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     }
   }
 
-  if (isNewBlock) {
-    targetRange.setValues(writeValues)
-               .setBackgrounds(writeBgs)
-               .setFontColors(writeFonts)
-               .setDataValidations(writeRules)
-               .setHorizontalAlignment("left");
-    console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 新規月のため、一括で爆速展開しました。`);
-  } else {
-    let modifyCellCount = 0;
-    for (let r = 0; r < writeValues.length; r++) {
-      for (let c = 0; c < 12; c++) {
-        let currentCellVal = String(currentSheetValues[r][c]);
-        let expectedCellVal = String(writeValues[r][c]);
-        
-        if (currentCellVal !== expectedCellVal) {
-          let cellRange = sheet.getRange(startRow + 19 + r, 4 + c);
-          
-          cellRange.setValue(expectedCellVal)
-                   .setBackground(writeBgs[r][c])
-                   .setFontColor(writeFonts[r][c]);
-          
-          if (!currentSheetValidations[r][c]) {
-            cellRange.setDataValidation(writeRules[r][c]);
-          }
-          modifyCellCount++;
-        }
-      }
-    }
-    if (modifyCellCount > 0) {
-      console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 変更のあった ${modifyCellCount} マスのみをピンポイントでプルダウン同期しました（無駄な上書きゼロ）。`);
-    }
-  }
+  // =========================================================
+  // ★ 合理化パッチ②：一括バッチ書込（完全上書き方式）
+  // 1マスごとの丁寧な通信（差分更新）を完全に廃止し、
+  // 変更の有無に関わらず、メモリ上で完成させた1ヶ月分のデータを
+  // 1回の通信で「ガバッ」と上書きする爆速モードで統一します。
+  // =========================================================
+  targetRange.setValues(writeValues)
+             .setBackgrounds(writeBgs)
+             .setFontColors(writeFonts)
+             .setDataValidations(writeRules)
+             .setHorizontalAlignment("left");
+  
+  console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 描画完了（一括バッチ書込）`);
+  // =========================================================
 
   if (typeof writeDashboardInfo === 'function') {
     writeDashboardInfo(sheet, startRow, blockEndRow, edges, stats, doctorCosts, wageDataList, Array.from(overrides.senkouDocs));
   }
   
-  const activeTemplateName = typeof CONFIG !== 'undefined' && CONFIG.TEMPLATE_SHEET_NAME ? CONFIG.TEMPLATE_SHEET_NAME : "テンプレート";
-  if (isNewBlock && activeTemplateName === "テンプレート") {
-    // 新規ブロック追加時のみ同期
-  }
-  
-  if (!isNewBlock) {
-    let currentMaxRow = sheet.getMaxRows();
-    let currentLastRow = sheet.getLastRow();
-    if (currentMaxRow > currentLastRow + 5) {
-      sheet.deleteRows(currentLastRow + 6, currentMaxRow - currentLastRow - 5);
-    }
-  }
-
-  SpreadsheetApp.flush();
+  // SpreadsheetApp.flush(); // 強制セーブによるファイル全体への負荷をなくすため削除済み
   return true; 
 }
 

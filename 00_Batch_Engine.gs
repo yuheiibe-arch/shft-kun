@@ -6,6 +6,8 @@
  * 強制セーブ(Flush)・フライング防止・開院日スキップ解除パッチ適用版
  * ★ 誤爆絶対防衛ガード適用（管理用・機能用シートの混入を完全ブロック）
  * ★【究極のV8メモリパンク対策】限界時間を1.5分に短縮しINTERNALエラーを根絶
+ * ★【単一ターゲット・ステルス化】全シート走査・行削除・強制セーブの完全排除
+ * ★【定期シフト】内科・小児科の絶対分類ルール完全適用版
  * ==========================================
  */
 
@@ -19,8 +21,6 @@ function startBackgroundBatch(payload) {
 
   // =========================================================
   // 🛡️【誤爆絶対防衛ガード・強化版】
-  // ご提示いただいた「その他目次」にある管理用・機能用シートを完全に網羅。
-  // リストにこれらの単語が部分一致でも含まれていた場合、強制的に除外します。
   // =========================================================
   payload.locations = payload.locations.filter(loc => {
     let invalidWords = [
@@ -99,7 +99,6 @@ function processBatchQueue() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   if (!queue.locations || queue.locations.length === 0) {
-    safeGenerateAreaIndexSheets(ss);
     props.deleteProperty('BOSHUKUN_BATCH_QUEUE');
     return;
   }
@@ -199,7 +198,6 @@ function processBatchQueue() {
   // ★ 連続描画ループ
   // =========================================================
   while (queue.currentMonthIndex < targetMonths.length) {
-    // 短縮した安全装置で、限界が来る前に早めにバトンを渡す
     if (Date.now() - BATCH_START_TIME > SAFE_TIME_LIMIT) {
       props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
       ScriptApp.newTrigger('processBatchQueue').timeBased().after(2000).create();
@@ -212,17 +210,39 @@ function processBatchQueue() {
       let filteredDataForMonth = {};
       for (let dStr in originalDataForMonth) {
         let shifts = originalDataForMonth[dStr];
+        
+        // =========================================================
+        // ★修正：定期シフト側にも「内科明記の絶対ルール」を完全適用
+        // =========================================================
         if (isSplitTarget && targetCat) {
+          let otherCat = targetCat === "内科" ? "小児科" : "内科";
           shifts = shifts.filter(s => {
             let docSpec = specialtyMap[s.doctorName] || "不明";
-            if (docSpec === targetCat) return true;
             let text = s.rawShift || "";
-            if (text.includes(targetCat)) return true;
-            let otherCat = targetCat === "内科" ? "小児科" : "内科";
-            if (text.includes(otherCat)) return false;
-            return true; 
+            
+            let isBoxMatch = text.includes(targetCat);
+            let isOtherBoxMatch = text.includes(otherCat);
+            let isSubjectMatch = docSpec.includes(targetCat);
+            let isOtherSubjectMatch = docSpec.includes(otherCat);
+            
+            // 1. まず内科(小児科)等と記載があるか
+            if (isOtherBoxMatch && !isBoxMatch) {
+              return false; // 明確に別の科目が書かれているなら除外
+            } else if (isBoxMatch) {
+              return true; // 明記されているならそのまま通す
+            } else {
+              // 2. 記載がないならマスタに問い合わせる
+              if (targetCat === "内科") {
+                if (!isSubjectMatch) return false; // マスタが「内科」でないなら小児科と判断し除外
+              } else {
+                if (isOtherSubjectMatch) return false; // マスタが明確に「内科」なら小児科から除外
+              }
+              return true;
+            }
           });
         }
+        // =========================================================
+
         if (shifts.length > 0) filteredDataForMonth[dStr] = shifts;
       }
 
@@ -245,14 +265,6 @@ function processBatchQueue() {
     if (finalSheet && isRenderedAny) {
       if (finalSheet.getMaxColumns() > 16) finalSheet.deleteColumns(17, finalSheet.getMaxColumns() - 16);
       
-      // ★ 追加：全月展開が終わった後、シート下部に残った「ゴミ行」を綺麗に掃除する
-      let finalLastRow = finalSheet.getLastRow();
-      let finalMaxRow = finalSheet.getMaxRows();
-      if (finalMaxRow > finalLastRow + 5) {
-        finalSheet.deleteRows(finalLastRow + 6, finalMaxRow - finalLastRow - 5);
-      }
-
-      // ★ この処理が完了することで、赤い三角が消え、背景色が塗られます
       safeExecute(() => syncSheetIndependent(finalSheet), 3, "書式・プルダウン同期");
       
       if (typeof computeStableHash === 'function') {
@@ -275,7 +287,6 @@ function processBatchQueue() {
     }
     queue.status = "COMPLETED";
     props.setProperty('BOSHUKUN_BATCH_QUEUE', JSON.stringify(queue));
-    safeGenerateAreaIndexSheets(ss);
 
     // ★ 完了後にキャッシュシートをお掃除
     let cacheSheet = ss.getSheetByName("⚙️通信キャッシュ");
@@ -296,13 +307,11 @@ function _saveBatchCache(ss, dataObj) {
   }
   let jsonStr = JSON.stringify(dataObj);
   let chunks = [];
-  // Googleのセル文字数制限(5万字)を超えないよう4.5万字ごとに分割
   for (let i = 0; i < jsonStr.length; i += 45000) {
     chunks.push([jsonStr.substring(i, i + 45000)]);
   }
   if (chunks.length > 0) {
     sheet.getRange(1, 1, chunks.length, 1).setValues(chunks);
-    SpreadsheetApp.flush(); 
   }
 }
 
@@ -376,7 +385,7 @@ function buildDoctorSpecialtyMap(year) {
         const subjIdx = data[0].findIndex(h => String(h).includes("専門") || String(h).includes("科目"));
         if (nameIdx !== -1 && subjIdx !== -1) {
           for (let r = 1; r < data.length; r++) {
-            let docName = String(data[r][nameIdx]).replace(/先生$/, "").replace(/[\s  ]+/g, "").trim();
+            let docName = String(data[r][nameIdx]).replace(/先生$/, "").replace(/[\s ]+/g, "").trim();
             let spec = String(data[r][subjIdx]).trim();
             if (docName) {
               if (spec.includes("内科")) map[docName] = "内科";

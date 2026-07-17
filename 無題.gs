@@ -1,111 +1,93 @@
-function auditMissingMonths() {
-  console.log("=== 🔍 [現状監査] 拠点別・欠落月 特定デバックスクリプト ===");
-  const targetYear = 2026;
-
-  // 1. マスタから開院日を取得
-  let openDatesMap = {};
-  try {
-    const masterSs = SpreadsheetApp.openByUrl("https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit");
-    const sheet = masterSs.getSheetByName("拠点名");
-    const data = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      let name = String(data[i][0]).trim();
-      let dVal = data[i][7]; // H列(開院日)
-      if (name) {
-        if (dVal instanceof Date) openDatesMap[name] = dVal;
-        else if (dVal) openDatesMap[name] = new Date(dVal);
-        else openDatesMap[name] = null;
-      }
-    }
-  } catch(e) {
-    console.log("❌ マスタ取得エラー: " + e.message);
+function test_UI_to_Batch_Connection() {
+  console.log("=== 🔬 [導通テスト] UI指示受け取り ＆ バッチ起動テスト ===");
+  
+  // 1. UIから送られてくるデータを擬似的に作成（代官山・通年）
+  const mockPayload = {
+    year: "2026",
+    term: "通年",
+    locations: ["代官山"]
+  };
+  console.log(`📡 [テスト1/4] UIからの擬似指示（Payload）を作成しました: ${JSON.stringify(mockPayload)}`);
+  
+  // 2. startBackgroundBatch の内部ロジックを段階的にテスト
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  console.log("📡 [テスト2/4] スプレッドシートの取得完了");
+  
+  // 誤爆防衛ガードのテスト
+  let validLocations = mockPayload.locations.filter(loc => {
+    let invalidWords = [
+      "その他", "キャッシュ", "作業表", "お休み", "確定シフト", 
+      "欠勤", "キャンセル", "手順書", "原本", "振替勤務", 
+      "先行応募", "単独募集", "定期募集", "目次", "設定", 
+      "テンプレート", "ダッシュボード"
+    ];
+    return !invalidWords.some(word => loc.includes(word));
+  });
+  console.log(`🛡️ [テスト3/4] ガード通過後のターゲット拠点: ${JSON.stringify(validLocations)}`);
+  
+  if (validLocations.length === 0) {
+    console.log("❌ テスト終了: ターゲット拠点が0になりました。");
     return;
   }
-
-  // 2. 現在のスプレッドシート内の「2026」から始まるシートを監査
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = ss.getSheets();
-  let errorCount = 0;
-
-  sheets.forEach(sheet => {
-    let sheetName = sheet.getName();
-    // 「2026」から始まるシートのみ対象
-    if (!sheetName.startsWith(String(targetYear))) return;
-
-    // シート名から拠点名を抽出 (例: "2026北葛西（内科）" -> "北葛西")
-    let rawLoc = sheetName.replace(String(targetYear), '').replace(/（.*?）|\(.*?\)|【.*?】/g, "").trim();
-
-    // マスタと名前をマッチング
-    let clinicOpenDate = null;
-    let matchedMasterName = Object.keys(openDatesMap).find(k => rawLoc.includes(k) || k.includes(rawLoc));
-    if (matchedMasterName) {
-      clinicOpenDate = openDatesMap[matchedMasterName];
-    }
-
-    // 期待される月リストを作成（通年：4月〜翌3月）
-    let expectedMonths = [];
-    for (let m = 4; m <= 12; m++) expectedMonths.push(`${targetYear}/${('0' + m).slice(-2)}`);
-    for (let m = 1; m <= 3; m++) expectedMonths.push(`${targetYear + 1}/${('0' + m).slice(-2)}`);
-
-    // 開院日フィルタ適用（開院前の月は「期待される月」から除外）
-    if (clinicOpenDate && !isNaN(clinicOpenDate.getTime())) {
-      let openYM = (clinicOpenDate.getFullYear() * 100) + (clinicOpenDate.getMonth() + 1);
-      expectedMonths = expectedMonths.filter(ym => {
-        let parts = ym.split('/');
-        let targetYM = (parseInt(parts[0], 10) * 100) + parseInt(parts[1], 10);
-        return targetYM >= openYM;
-      });
-    }
-
-    // シート内の全データを走査して「実際に描画されている月」を抽出
-    let foundMonths = new Set();
-    let values = sheet.getDataRange().getValues();
-    let displayValues = sheet.getDataRange().getDisplayValues();
-
-    for (let r = 0; r < values.length; r++) {
-      for (let c = 0; c < values[r].length; c++) {
-        let v = values[r][c];
-        let dv = displayValues[r][c];
-        
-        // Dateオブジェクトとして存在する場合
-        if (v instanceof Date) {
-          let y = v.getFullYear();
-          let m = v.getMonth() + 1;
-          if ((y === targetYear && m >= 4) || (y === targetYear + 1 && m <= 3)) {
-            foundMonths.add(`${y}/${('0'+m).slice(-2)}`);
-          }
-        } 
-        // 文字列として存在する場合 (2026/04, 2026年4月 などに柔軟に対応)
-        else if (typeof dv === 'string') {
-          let match = dv.match(/(2026|2027)[\/\-年]\s*(1[0-2]|0?[1-9])/);
-          if (match) {
-            let y = parseInt(match[1], 10);
-            let m = parseInt(match[2], 10);
-            if ((y === targetYear && m >= 4 && m <= 12) || (y === targetYear + 1 && m >= 1 && m <= 3)) {
-              foundMonths.add(`${y}/${('0'+m).slice(-2)}`);
-            }
-          }
-        }
-      }
-    }
-
-    // 差分チェック（期待される月リストのうち、シート内に存在しなかった月）
-    let missingMonths = expectedMonths.filter(m => !foundMonths.has(m));
-
-    if (missingMonths.length > 0) {
-      console.log(`🚨 拠点 [${sheetName}]`);
-      console.log(`   -> 開院日: ${clinicOpenDate ? Utilities.formatDate(clinicOpenDate, "JST", "yyyy/MM/dd") : "設定なし（通年対象）"}`);
-      console.log(`   -> ❌ 欠落している月: ${missingMonths.join(", ")}`);
-      errorCount++;
+  
+  // 3. キャッシュ作成処理の限界テスト（ここがフリーズの疑いがある場所）
+  console.log("⏳ [テスト4/4] 外部データの一括ダウンロードとシートキャッシュの作成を開始します...");
+  console.log("   （※ここで処理が止まる、または数分かかる場合は、この処理がタイムアウトの元凶です）");
+  
+  const startTime = Date.now();
+  
+  try {
+    const targetYear = parseInt(mockPayload.year, 10);
+    const baseLocs = [...new Set(validLocations.map(loc => loc.replace(/（.*?）/, '')))];
+    
+    // 外部から一括取得（※依存関数が存在するかチェック）
+    let extractedData = {};
+    if (typeof fetchAndOrganizeData === 'function') {
+       console.log("   -> fetchAndOrganizeData を実行中...");
+       extractedData = fetchAndOrganizeData(targetYear, mockPayload.term, baseLocs);
     } else {
-      console.log(`✅ 拠点 [${sheetName}]: 欠落なし`);
+       console.log("   ⚠️ fetchAndOrganizeData 関数が見つかりません。");
     }
-  });
-
-  if (errorCount === 0) {
-    console.log("\n✨ すべての「2026」シートで、開院日に基づく必要な月がすべて揃っています。");
-  } else {
-    console.log(`\n⚠️ 合計 ${errorCount} 拠点で「本来あるべき月の欠落」が確認されました。`);
+    
+    let rawCache = {};
+    if (typeof getMasterRawData === 'function') {
+       console.log("   -> getMasterRawData を実行中...");
+       rawCache = getMasterRawData(targetYear);
+    } else {
+       console.log("   ⚠️ getMasterRawData 関数が見つかりません。");
+    }
+    
+    let specialtyMap = {};
+    if (typeof buildDoctorSpecialtyMap === 'function') {
+       console.log("   -> buildDoctorSpecialtyMap を実行中...");
+       specialtyMap = buildDoctorSpecialtyMap(targetYear);
+    } else {
+       console.log("   ⚠️ buildDoctorSpecialtyMap 関数が見つかりません。");
+    }
+    
+    console.log("   -> データの取得完了。隠しシート（⚙️通信キャッシュ）への保存を試みます...");
+    
+    // 隠しシートに保存
+    if (typeof _saveBatchCache === 'function') {
+      _saveBatchCache(ss, {
+        extractedData: extractedData,
+        rawCache: rawCache,
+        specialtyMap: specialtyMap
+      });
+      const endTime = Date.now();
+      console.log(`✅ キャッシュの作成と保存に成功しました！ (所要時間: ${(endTime - startTime) / 1000} 秒)`);
+      console.log("💡 結論: UIからの受け取りからキャッシュ保存まで、正常に通過できます。トリガー起動に進めます。");
+    } else {
+      console.log("   ⚠️ _saveBatchCache 関数が見つかりません。");
+    }
+    
+  } catch(e) {
+    const errorTime = Date.now();
+    console.log(`❌ 【エラー発生】キャッシュ作成中にフリーズ（またはクラッシュ）しました。`);
+    console.log(`   発生までの時間: ${(errorTime - startTime) / 1000} 秒`);
+    console.log(`   エラー内容: ${e.message}`);
+    console.log("💡 結論: 予想通り、この一括ダウンロード＆シート保存処理が重すぎてシステムを止めています。");
   }
-  console.log("=== 調査完了 ===");
+  
+  console.log("=== 導通テスト完了 ===");
 }
