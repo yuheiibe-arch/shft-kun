@@ -7,6 +7,9 @@
  * ★【原点回帰】初期キャンバス1200行拡張 ＆ 1マスずつの通信を完全廃止した一括バッチ上書き版
  * ★【限界突破】1ヶ月描画ごとの強制Flush追加（メモリパンク・タイムアウト完全防衛版）
  * ★【ゴミ排除】新規シートを必ず「末尾」に作成する強制パッチ適用
+ * ★ A列の分割 ＆ A列・B列すべて中央揃え（真ん中表記）＆ B列の表示形式リセット完全統合版
+ * ★【修正】isHoliday未定義エラー完全修正版
+ * ★【重大修正】先行応募・お休み・振替データを強制的にマスタ本体から取得するよう修正
  * ==========================================
  */
 
@@ -25,16 +28,31 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
     globalSpecialtyMap = typeof buildDoctorSpecialtyMap === 'function' ? buildDoctorSpecialtyMap(yStr) : {};
   }
 
+  // =======================================================
+  // ★ 重大修正：外部ファイルではなく、マスタ本体のIDを直接指定して読み込む
+  // =======================================================
   if (!globalOverrideRawData) {
     globalOverrideRawData = { advance: [], absence: [], substitute: [], kyukan: [] };
-    let sAdv = ss.getSheetByName('先行応募'); if(sAdv) globalOverrideRawData.advance = sAdv.getDataRange().getValues();
-    let sAbs = ss.getSheetByName('お休み情報'); if(sAbs) globalOverrideRawData.absence = sAbs.getDataRange().getValues();
-    let sSub = ss.getSheetByName('振替勤務'); if(sSub) globalOverrideRawData.substitute = sSub.getDataRange().getValues();
+    
     try {
+      const MASTER_ID = '10yPdoOOgqSSGKwoiPAXi83YM9vb_Em8r6Ex-bLfg28M';
+      const masterSs = SpreadsheetApp.openById(MASTER_ID);
+      
+      let sAdv = masterSs.getSheetByName('先行応募'); 
+      if(sAdv) globalOverrideRawData.advance = sAdv.getDataRange().getValues();
+      
+      let sAbs = masterSs.getSheetByName('お休み情報'); 
+      if(sAbs) globalOverrideRawData.absence = sAbs.getDataRange().getValues();
+      
+      let sSub = masterSs.getSheetByName('振替勤務'); 
+      if(sSub) globalOverrideRawData.substitute = sSub.getDataRange().getValues();
+      
       const kyuSs = SpreadsheetApp.openByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
       const kyuSheet = kyuSs.getSheetByName("休館日");
       if (kyuSheet) globalOverrideRawData.kyukan = kyuSheet.getDataRange().getValues();
-    } catch(e) {}
+    } catch(e) {
+      console.error("マスタデータ（先行応募等）の取得に失敗: " + e.message);
+    }
   }
 
   const processOverrideData = (data, targetDict, type) => {
@@ -70,13 +88,9 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
           // 通す
         } else {
           if (targetCat === "内科") {
-            if (!isSubjectMatch) {
-              continue; 
-            }
+            if (!isSubjectMatch) continue; 
           } else {
-            if (isOtherSubjectMatch) {
-              continue; 
-            }
+            if (isOtherSubjectMatch) continue; 
           }
         }
       }
@@ -148,15 +162,9 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   let isNewBlock = false;
   
   if (!sheet) {
-    // ★ ゴミが途中に挟まらないよう、必ずシートの「末尾（一番右）」に追加する
     sheet = ss.insertSheet(finalSheetName, ss.getSheets().length);
     isNewBlock = true;
 
-    // =========================================================
-    // ★ 合理化パッチ①：初期キャンバス拡張
-    // 1000行で足りなくなることを見越し、最初から1200行に拡張しておく
-    // （これにより、ループ処理中の行追加による激重処理がゼロになります）
-    // =========================================================
     let initialMaxCols = sheet.getMaxColumns();
     if (initialMaxCols > 16) {
       sheet.deleteColumns(17, initialMaxCols - 16);
@@ -166,7 +174,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     if (currentMaxRows < 1200) {
       sheet.insertRowsAfter(currentMaxRows, 1200 - currentMaxRows);
     }
-    // =========================================================
   }
   
   const templateSheet = ss.getSheetByName(typeof CONFIG !== 'undefined' && CONFIG.TEMPLATE_SHEET_NAME ? CONFIG.TEMPLATE_SHEET_NAME : "テンプレート");
@@ -196,7 +203,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   let blockEndRow = startRow + tempRange.getNumRows() - 1;
   const requiredRows = blockEndRow + 10;
   
-  // 1200行に拡張済みなので、ここはほぼ通過します（無駄な追加が起きない）
   if (sheet.getMaxRows() < requiredRows) {
     sheet.insertRowsAfter(sheet.getMaxRows(), Math.max(requiredRows - sheet.getMaxRows(), 100));
   }
@@ -256,19 +262,21 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   const leftHeaderRange = sheet.getRange(startRow + 19, 1, groupedDays.length * 2, 2);
   let leftHeaderValues = leftHeaderRange.getValues();
   let leftHeaderModified = false;
+  
+  let unmergeRanges = [];
+
+  sheet.getRange(startRow + 19, 2, groupedDays.length * 2, 1).setNumberFormat("0");
 
   groupedDays.forEach((dayInfo, dIdx) => {
     let rIdx = dIdx * 2;
-    if (!leftHeaderValues[rIdx][0]) {
-      leftHeaderValues[rIdx][0] = dayInfo.dayOfWeek;
-      leftHeaderModified = true;
-    }
-    if (!leftHeaderValues[rIdx][1]) {
-      leftHeaderValues[rIdx][1] = dayInfo.weekNum;
-      leftHeaderModified = true;
-    }
-    
+    let actualRow = startRow + 19 + rIdx;
+
     if (!dayInfo.isValid) {
+      leftHeaderValues[rIdx][0] = dayInfo.dayOfWeek;
+      leftHeaderValues[rIdx][1] = "";
+      leftHeaderValues[rIdx + 1][0] = "";
+      leftHeaderModified = true;
+
       let emptyRow = new Array(12).fill("");
       let grayRow = new Array(12).fill("#cccccc");
       let nullRules = new Array(12).fill(null);
@@ -279,6 +287,21 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
       currentRow += 2;
       return; 
     }
+    
+    leftHeaderValues[rIdx][0] = dayInfo.dayOfWeek;
+    leftHeaderValues[rIdx][1] = dayInfo.weekNum;
+    
+    let exactDate = new Date(dayInfo.dateStr);
+    let isTrueHolidayLocal = false;
+    if (typeof _debug_isTrueHoliday === "function") isTrueHolidayLocal = _debug_isTrueHoliday(dayInfo.dateStr);
+    
+    let displayStr = `${exactDate.getMonth() + 1}/${exactDate.getDate()}`;
+    if (isTrueHolidayLocal) displayStr += "(祝)";
+    
+    leftHeaderValues[rIdx + 1][0] = displayStr;
+    
+    unmergeRanges.push(`A${actualRow}:A${actualRow + 1}`);
+    leftHeaderModified = true;
  
     const dailyShifts = monthData[dayInfo.dateStr] || [];
     const tetrisResult = typeof calculateTetrisAllocation === 'function' ? calculateTetrisAllocation(dailyShifts, cleanLocName) : {line1:[], line2:[], docTypes:{}};
@@ -291,6 +314,7 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     if (typeof _debug_isTrueHoliday === "function") isTrueHoliday = _debug_isTrueHoliday(dayInfo.dateStr);
     let dayType = dayInfo.dayOfWeek === "土" ? "土曜" : dayInfo.dayOfWeek === "日" ? "日曜" : "平日";
     if (isTrueHoliday) dayType = "日曜";
+
     let isHoliday = (dayType !== "平日");
     
     const dateKey = dayInfo.dateStr;
@@ -405,7 +429,9 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   });
 
   if (leftHeaderModified) {
-    leftHeaderRange.setValues(leftHeaderValues).setHorizontalAlignment("left");
+    if (unmergeRanges.length > 0) sheet.getRangeList(unmergeRanges).breakApart();
+    leftHeaderRange.setValues(leftHeaderValues);
+    sheet.getRange(startRow + 19, 1, groupedDays.length * 2, 2).setHorizontalAlignment("center");
   }
 
   if (!isNewBlock && actualShiftHasDoctorCount === 0) {
@@ -416,12 +442,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
     }
   }
 
-  // =========================================================
-  // ★ 合理化パッチ②：一括バッチ書込（完全上書き方式）
-  // 1マスごとの丁寧な通信（差分更新）を完全に廃止し、
-  // 変更の有無に関わらず、メモリ上で完成させた1ヶ月分のデータを
-  // 1回の通信で「ガバッ」と上書きする爆速モードで統一します。
-  // =========================================================
   targetRange.setValues(writeValues)
              .setBackgrounds(writeBgs)
              .setFontColors(writeFonts)
@@ -429,15 +449,12 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
              .setHorizontalAlignment("left");
   
   console.log(`🏥 拠点 [${finalSheetName}] (${yearMonthStr}): 描画完了（一括バッチ書込）`);
-  // =========================================================
 
   if (typeof writeDashboardInfo === 'function') {
     writeDashboardInfo(sheet, startRow, blockEndRow, edges, stats, doctorCosts, wageDataList, Array.from(overrides.senkouDocs));
   }
   
-  // ★【限界突破パッチ】キューのパンクを防ぐため、1ヶ月（1ブロック）ごとに必ず強制セーブ（息継ぎ）を行う
   SpreadsheetApp.flush(); 
-
   return true; 
 }
 

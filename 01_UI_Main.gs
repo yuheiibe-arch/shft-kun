@@ -98,23 +98,37 @@ function getAvailableYears() {
 function getLocationListForUI(params) {
   const targetYear = parseInt(params.year, 10);
   const targetTerm = params.term;
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
   
   let termEndDate = targetTerm === "上期" ? new Date(targetYear, 8, 30) : new Date(targetYear + 1, 2, 31);
   const openDatesMap = typeof getLocationOpenDates === 'function' ? getLocationOpenDates() : {};
   let locationList = [];
   
+  // ★ 3つの外部ファイルのシート一覧をかき集める
+  const TARGET_IDS = [
+    "1rScroDlMNiRxThbaxGEuvhyCH2b9RoM6BadNSCAWsvI", // 東京埼玉
+    "19Q-xVsMX0thz_rvmdo_GERJvhjFLQgw2pUkWaTYxQhE", // 関東
+    "1fIFvTck_g9-Hp8MSpY7hIWwE5L2buJjBHIY4GBEf_MY"  // 関西
+  ];
+  let externalSheetNames = new Set();
+  TARGET_IDS.forEach(id => {
+    try {
+      let extSs = SpreadsheetApp.openById(id);
+      extSs.getSheets().forEach(s => externalSheetNames.add(s.getName()));
+    } catch(e) {}
+  });
+
   for (const locName in openDatesMap) {
     let openDate = openDatesMap[locName];
     if (!openDate || openDate > termEndDate) continue;
     
     if (locName === "亀有" || locName === "北葛西") {
       [`${locName}（内科）`, `${locName}（小児科）`].forEach(sub => {
-        const isCreated = (ss.getSheetByName(`${targetYear}${sub}`) !== null);
+        // ★外部ファイル群の中にシートが存在するかチェック
+        const isCreated = externalSheetNames.has(`${targetYear}${sub}`);
         locationList.push({ name: sub, isCreated: isCreated });
       });
     } else {
-      const isCreated = (ss.getSheetByName(`${targetYear}${locName}`) !== null);
+      const isCreated = externalSheetNames.has(`${targetYear}${locName}`);
       locationList.push({ name: locName, isCreated: isCreated });
     }
   }

@@ -2,12 +2,15 @@
  * ==========================================
  * 00_Index_Monitor.gs
  * 進行中モニターと目次シートの生成
+ * ★ 3ファイルダイレクトリンク対応 ＆ 超軽量化パッチ
+ * ★ 単独実行時エラー回避（セーフティネット）搭載版
+ * ★ バッチ完了時自動連動（RUN_INDEX_UPDATE）統合版
  * ==========================================
  */
 
 function createProgressMonitor(ss, totalCount) {
-  // ★爆速化：シートを削除・追加するとスプレッドシートが数分間フリーズするため、
-  // 「すでにあるシートの中身だけを消して使い回す」ように変更！
+  // シートを削除・追加するとスプレッドシートが数分間フリーズするため、
+  // 「すでにあるシートの中身だけを消して使い回す」
   let sheet = ss.getSheetByName("🗂️進行中モニター");
   
   if (!sheet) {
@@ -22,7 +25,7 @@ function createProgressMonitor(ss, totalCount) {
        .setBackground("#202124").setFontColor("#ffffff").setFontWeight("bold").setFontSize(18)
        .setVerticalAlignment("middle").setHorizontalAlignment("center");
   
-  // ★チェックボックス設置（A2セル）
+  // チェックボックス設置（A2セル）
   sheet.getRange("A2").insertCheckboxes().setValue(false).setHorizontalAlignment("center");
   sheet.getRange("B2").setValue("← 🛑 処理を緊急停止する場合は、ここにチェックを入れてください")
        .setFontColor("#ea4335").setFontWeight("bold").setFontSize(14).setVerticalAlignment("middle");
@@ -49,21 +52,31 @@ function updateProgressMonitor(ss, completed, total, remainMin, currentLoc) {
   } catch(e) {}
 }
 
+
 // ==========================================
-// ★爆速化：取得したデータを一時保存（キャッシュ）する変数を外に出す
-let cachedAreaMap = null;
+// ▼▼ 目次自動生成・リンク更新機能 ▼▼
 // ==========================================
 
+function RUN_INDEX_UPDATE() {
+  console.log("🚀 目次更新処理をスタートします...");
+  
+  // シフトくん本体のID（絶対に失敗しないように直接指定）
+  const MASTER_ID = '10yPdoOOgqSSGKwoiPAXi83YM9vb_Em8r6Ex-bLfg28M';
+  const ss = SpreadsheetApp.openById(MASTER_ID);
+  
+  generateAreaIndexSheets(ss);
+  
+  console.log("✅ 目次の更新が完了しました！スプレッドシートをご確認ください。");
+}
+
+let cachedAreaMap = null;
+
 function getAreaMapping() {
-  // すでにデータを持っていれば、わざわざスプレッドシートを開きに行かず使い回す！
-  if (cachedAreaMap) {
-    return cachedAreaMap;
-  }
+  if (cachedAreaMap) return cachedAreaMap;
 
   let map = {};
   try {
-    // ★ここを safeOpenByUrl に変更
-    const ss = safeOpenByUrl("https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit");
+    const ss = SpreadsheetApp.openByUrl("https://docs.google.com/spreadsheets/d/14RbsDcv0nXfEwweki8-9cK3lQUg1XUuhozLNF9u2qAs/edit");
     const data = ss.getSheetByName("拠点名").getDataRange().getValues();
     const headers = data[0];
     const grpIdx = headers.indexOf("拠点グループ");
@@ -76,75 +89,71 @@ function getAreaMapping() {
       let area = areaIdx !== -1 ? String(data[i][areaIdx]).trim() : "";
       
       let finalArea = "その他";
-      if (grp.includes("関東第一") || grp.includes("関東第二")) {
-        finalArea = "東京";
-      } else if (grp.includes("神奈川") || area.includes("神奈川")) {
-        finalArea = "神奈川";
-      } else if (grp.includes("千葉") || area.includes("千葉")) {
-        finalArea = "千葉";
-      } else if (grp.includes("埼玉") || area.includes("埼玉")) {
-        finalArea = "埼玉";
-      } else if (grp.includes("茨城") || area.includes("茨城")) {
-        finalArea = "茨城";
-      } else if (area.includes("関西") || grp.includes("関西")) {
-        finalArea = "関西";
-      }
+      if (grp.includes("関東第一") || grp.includes("関東第二")) finalArea = "東京";
+      else if (grp.includes("神奈川") || area.includes("神奈川")) finalArea = "神奈川";
+      else if (grp.includes("千葉") || area.includes("千葉")) finalArea = "千葉";
+      else if (grp.includes("埼玉") || area.includes("埼玉")) finalArea = "埼玉";
+      else if (grp.includes("茨城") || area.includes("茨城")) finalArea = "茨城";
+      else if (area.includes("関西") || grp.includes("関西")) finalArea = "関西";
+      
       map[loc] = finalArea;
     }
   } catch (e) {}
   
-  // 取得したデータを変数に保存して、次回から使い回せるようにする
   cachedAreaMap = map;
   return map;
 }
 
-function safeGenerateAreaIndexSheets(ss) {
-  try {
-    generateAreaIndexSheets(ss);
-  } catch (e) {
-    try {
-      let monitor = ss.getSheetByName("🗂️進行中モニター");
-      if (monitor) monitor.getRange("A1:B1").setValue("✨ すべての作成が完了しました！").setBackground("#34a853");
-    } catch(e2) {}
-  }
-}
-
 function generateAreaIndexSheets(ss) {
+  if (!ss) ss = SpreadsheetApp.openById('10yPdoOOgqSSGKwoiPAXi83YM9vb_Em8r6Ex-bLfg28M');
+
   try {
     let monitor = ss.getSheetByName("🗂️進行中モニター");
     if (monitor) ss.deleteSheet(monitor);
   } catch(e) {}
 
+  const TARGET_IDS = [
+    "1rScroDlMNiRxThbaxGEuvhyCH2b9RoM6BadNSCAWsvI", // 東京・埼玉
+    "19Q-xVsMX0thz_rvmdo_GERJvhjFLQgw2pUkWaTYxQhE", // 関東
+    "1fIFvTck_g9-Hp8MSpY7hIWwE5L2buJjBHIY4GBEf_MY"  // 関西
+  ];
+
   const areaMap = getAreaMapping();
-  let sheets = ss.getSheets();
   let shiftSheets = [];
   
-  sheets.forEach(s => {
-    let name = s.getName();
-    if (name.includes("🗂️") || name === "初期設定" || name === "テンプレート") return;
-    
-    let locMatch = name.match(/^\d{4}(.*)$/);
-    let locName = locMatch ? locMatch[1] : name;
-    let cleanLoc = locName.replace(/（.*?）/g, '').trim();
-    
-    let area = areaMap[cleanLoc] || "その他";
-    let order = 99;
-    let mainGroup = "その他";
-    
-    if (area === "東京") { order = 1; mainGroup = "関東"; }
-    else if (area === "神奈川") { order = 2; mainGroup = "関東"; }
-    else if (area === "千葉") { order = 3; mainGroup = "関東"; }
-    else if (area === "埼玉") { order = 4; mainGroup = "関東"; }
-    else if (area === "茨城") { order = 5; mainGroup = "関東"; } 
-    else if (area === "関西") { order = 6; mainGroup = "関西"; }
-    
-    shiftSheets.push({
-      sheetName: name,
-      url: `${ss.getUrl()}#gid=${s.getSheetId()}`,
-      area: area,
-      mainGroup: mainGroup,
-      order: order
-    });
+  TARGET_IDS.forEach(id => {
+    try {
+      let extSs = SpreadsheetApp.openById(id);
+      extSs.getSheets().forEach(s => {
+        let name = s.getName();
+        if (name.includes("🗂️") || name === "初期設定" || name === "テンプレート" || name === "目次") return;
+        
+        let locMatch = name.match(/^\d{4}(.*)$/);
+        let locName = locMatch ? locMatch[1] : name;
+        let cleanLoc = locName.replace(/（.*?）/g, '').trim();
+        
+        let area = areaMap[cleanLoc] || "その他";
+        let order = 99;
+        let mainGroup = "その他";
+        
+        if (area === "東京") { order = 1; mainGroup = "関東"; }
+        else if (area === "神奈川") { order = 2; mainGroup = "関東"; }
+        else if (area === "千葉") { order = 3; mainGroup = "関東"; }
+        else if (area === "埼玉") { order = 4; mainGroup = "関東"; }
+        else if (area === "茨城") { order = 5; mainGroup = "関東"; } 
+        else if (area === "関西") { order = 6; mainGroup = "関西"; }
+        
+        shiftSheets.push({
+          sheetName: name,
+          url: `https://docs.google.com/spreadsheets/d/${id}/edit#gid=${s.getSheetId()}`,
+          area: area,
+          mainGroup: mainGroup,
+          order: order
+        });
+      });
+    } catch(e) {
+      console.warn("外部ファイルの読み込みに失敗しました: " + id);
+    }
   });
 
   shiftSheets.sort((a, b) => {
@@ -171,11 +180,9 @@ function createIndexSheetForGroup(ss, sheetName, items) {
   
   let sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
-    sheet = ss.insertSheet(sheetName, 0);
+    sheet = ss.insertSheet(sheetName, ss.getSheets().length);
   } else {
     sheet.clear();
-    ss.setActiveSheet(sheet);
-    ss.moveActiveSheet(1);
   }
   
   let data = [[`✨ ${sheetName.replace("🗂️", "")}`, "", ""], ["エリア", "拠点・シート名", "リンク"]];
@@ -188,10 +195,5 @@ function createIndexSheetForGroup(ss, sheetName, items) {
   sheet.setColumnWidth(2, 250);
   sheet.setColumnWidth(3, 80);
   
-  try {
-    let maxCols = sheet.getMaxColumns();
-    let maxRows = sheet.getMaxRows();
-    if (maxCols > 3) sheet.deleteColumns(4, maxCols - 3);
-    if (maxRows > data.length + 5) sheet.deleteRows(data.length + 2, maxRows - (data.length + 1));
-  } catch(e) {}
+  SpreadsheetApp.flush(); 
 }

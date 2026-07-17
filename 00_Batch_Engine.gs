@@ -3,6 +3,7 @@
  * 00_Batch_Engine.gs
  * バックグラウンドのバッチ処理・キュー管理
  * ★【完全体】3ファイル自動振り分け＆直接書き出しモデル
+ * ★【リンク切れ防止】バッチ完了時に目次自動更新機能(RUN_INDEX_UPDATE)を連動
  * ==========================================
  */
 
@@ -291,11 +292,27 @@ function processBatchQueue() {
     console.log(`➡️ 拠点が完了しました。30秒間待機した後に次の拠点へ進みます。`);
     ScriptApp.newTrigger('processBatchQueue').timeBased().after(30000).create();
   } else {
+    // ========================================================
+    // ★ 修正箇所：すべての拠点の処理が完了した場合の処理
+    // ========================================================
     if (typeof updateProgressMonitor === 'function') {
       updateProgressMonitor(masterSs, queue.totalCount, queue.totalCount, 0, "🎉 すべての外部出力が正常に完了しました！");
     }
     props.deleteProperty('BOSHUKUN_BATCH_QUEUE');
     console.log(`🎉 全拠点のバッチ処理が完了しました。`);
+    
+    // ★ ここに「目次の自動更新」を追加！
+    console.log("🔄 引き続き、目次（直接リンク）の自動更新を開始します...");
+    try {
+      if (typeof RUN_INDEX_UPDATE === 'function') {
+        RUN_INDEX_UPDATE(); // 無題.gs にある更新スクリプトを呼び出す
+      } else {
+        console.warn("RUN_INDEX_UPDATE 関数が見つかりません。目次更新はスキップされます。");
+      }
+    } catch(e) {
+      console.error("目次の自動更新中にエラーが発生しました: " + e.message);
+    }
+    // ========================================================
   }
 }
 
