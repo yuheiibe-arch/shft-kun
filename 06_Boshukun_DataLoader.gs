@@ -1,8 +1,10 @@
+
 /**
  * ====================================================================
  * 07_Boshukun_DataLoader.gs
  * カレンダー生成・マスタ読み込み・契約備考の解析エンジン
  * ★【完全版】退職日マスタ連携＆最強パーサー（全角記号網羅版）
+ * ★【バグ修正】全角数字やイレギュラーな週指定を100%拾い上げる究極パーサー統合版
  * ====================================================================
  */
 
@@ -252,24 +254,35 @@ function _parseComplexShiftText(rawText) {
     if (!locMatch) return;
     let location = locMatch[1];
     
-    let weekMatch = t.match(/(毎週|[第1-5１-５・、,，\s]+)週?(月|火|水|木|金|土|日)曜?日?/);
-    if (!weekMatch) return;
+    // ★【究極強化版】: 「【拠点】」を除外した上で、曜日とその周辺の文字をガッツリ取る
+    let tWithoutLoc = t.replace(/【.*?】/, "");
     
-    let weekStr = weekMatch[1];
-    let dayOfWeek = weekMatch[2];
+    // 曜日を探す
+    let dowMatch = tWithoutLoc.match(/(月|火|水|木|金|土|日)曜?日?/);
+    if (!dowMatch) return;
+    let dayOfWeek = dowMatch[1];
+    
+    // 曜日の前にある文字を切り出す（例: 「第2・第4」や「毎週」）
+    let beforeDow = tWithoutLoc.split(dowMatch[0])[0];
+    
     let targetWeeks = [];
-    
-    if (weekStr.includes("毎週")) {
+    if (beforeDow.includes("毎週")) {
       targetWeeks = [1, 2, 3, 4, 5];
     } else {
-      let digits = weekStr.match(/\d/g);
+      // ★全角数字を半角に強制変換してから数字を根こそぎ抽出
+      let normalized = beforeDow.replace(/[０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
+      let digits = normalized.match(/\d/g);
       if (digits) {
-        targetWeeks = digits.map(Number);
+        // 1〜5の数字だけを安全に抽出（余計な数字の混入防止）
+        targetWeeks = digits.map(Number).filter(n => n >= 1 && n <= 5);
       }
     }
     
-    // ★ 時間の抽出：波ダッシュ「〜」、全角マイナス「−」などを完全網羅
-    let timeMatch = t.match(/(\d{1,2})[:：]?(\d{2})?\s*[～~〜\-ー−]\s*(\d{1,2})[:：]?(\d{2})?/);
+    // 数字が1つも拾えなかった場合はスキップ
+    if (targetWeeks.length === 0) return;
+    
+    // 時間の抽出（全角ハイフンや波ダッシュ、コロン無しも完全網羅）
+    let timeMatch = tWithoutLoc.match(/(\d{1,2})[:：]?(\d{2})?\s*[～~〜\-ー−]\s*(\d{1,2})[:：]?(\d{2})?/);
     if (!timeMatch) return;
     
     let sH = parseInt(timeMatch[1], 10);

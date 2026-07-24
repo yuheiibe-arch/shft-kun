@@ -4,7 +4,7 @@
  * コスト計算・ダッシュボード書き込み・統計初期化
  * ★月曜始まり完全固定パッチ（曜日ズレ最終解決版）
  * ★ダッシュボード12名（D〜O列）完全拡張版
- * ★【残存データ完全消去パッチ】ダッシュボード空欄のクリア処理を追加
+ * ★【残存データ完全消去パッチ】ダッシュボード空欄の直接クリア・白紙化処理を追加
  * ==========================================
  */
 
@@ -97,7 +97,6 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   const senkouColor = "#d9ead3"; 
   const emptyColor  = "#ffffff";
 
-  let docBgUpdates = []; 
   let alignUpdates = []; 
 
   for (let r = 0; r < values.length; r++) {
@@ -146,36 +145,36 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
       }
 
       // =========================================================
-      // ★ 修正箇所: 枠が余った場合、古い名前が残らないよう「完全に空欄で上書き」する処理を追加
+      // ★ 最強残像消去パッチ: シートに直接 `setValues` を行い、強制的に白紙化する
       // =========================================================
       if (cellText === "常勤医師") {
         let docs = Array.from(stats.uniqueJoukin);
+        let vals = new Array(12).fill("");
         let bgs = new Array(12).fill(emptyColor);
         for (let i = 0; i < 12; i++) { 
-          if (i < docs.length) { values[r][3 + i] = docs[i]; bgs[i] = joukinColor; }
-          else { values[r][3 + i] = ""; } // ★ 空欄で上書き消去
+          if (i < docs.length) { vals[i] = docs[i]; bgs[i] = joukinColor; }
         }
-        docBgUpdates.push({row: startRow + r, bgs: [bgs]});
+        sheet.getRange(startRow + r, 4, 1, 12).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
       
       if (cellText === "非常勤医師") {
         let docs = Array.from(stats.uniqueTeiki);
+        let vals = new Array(12).fill("");
         let bgs = new Array(12).fill(emptyColor);
         for (let i = 0; i < 12; i++) { 
-          if (i < docs.length) { values[r][3 + i] = docs[i]; bgs[i] = teikiColor; }
-          else { values[r][3 + i] = ""; } // ★ 空欄で上書き消去
+          if (i < docs.length) { vals[i] = docs[i]; bgs[i] = teikiColor; }
         }
-        docBgUpdates.push({row: startRow + r, bgs: [bgs]});
+        sheet.getRange(startRow + r, 4, 1, 12).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
       
       if (cellText === "先行応募" || cellText === "先行応募医師") {
-        let docs = senkouDocsArray;
+        let docs = senkouDocsArray || [];
+        let vals = new Array(12).fill("");
         let bgs = new Array(12).fill(emptyColor);
         for (let i = 0; i < 12; i++) { 
-          if (i < docs.length) { values[r][3 + i] = docs[i]; bgs[i] = senkouColor; }
-          else { values[r][3 + i] = ""; } // ★ 空欄で上書き消去
+          if (i < docs.length) { vals[i] = docs[i]; bgs[i] = senkouColor; }
         }
-        docBgUpdates.push({row: startRow + r, bgs: [bgs]});
+        sheet.getRange(startRow + r, 4, 1, 12).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
       // =========================================================
 
@@ -216,10 +215,10 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
     }
   }
   
+  // 値の一括書き戻し
   searchRange.setValues(values);
-  docBgUpdates.forEach(update => {
-     sheet.getRange(update.row, 4, 1, 12).setBackgrounds(update.bgs);
-  });
+  
+  // 配置の更新
   alignUpdates.forEach(update => {
      sheet.getRange(update.row, update.col, update.numRows, update.numCols).setHorizontalAlignment("left");
   });
