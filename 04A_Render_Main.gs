@@ -10,6 +10,7 @@
  * ★ A列の分割 ＆ A列・B列すべて中央揃え（真ん中表記）＆ B列の表示形式リセット完全統合版
  * ★【修正】isHoliday未定義エラー完全修正版
  * ★【重大修正】先行応募・お休み・振替データを強制的にマスタ本体から取得するよう修正
+ * ★【バグ修正】更新時に月が前後する問題を解決する最強検索ロジック適用版
  * ==========================================
  */
 
@@ -28,9 +29,6 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
     globalSpecialtyMap = typeof buildDoctorSpecialtyMap === 'function' ? buildDoctorSpecialtyMap(yStr) : {};
   }
 
-  // =======================================================
-  // ★ 重大修正：外部ファイルではなく、マスタ本体のIDを直接指定して読み込む
-  // =======================================================
   if (!globalOverrideRawData) {
     globalOverrideRawData = { advance: [], absence: [], substitute: [], kyukan: [] };
     
@@ -147,6 +145,10 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   
   const locOpenDate = globalOpenDatesCache[cleanLocName];
   const [yStr, mStr] = yearMonthStr.split('/');
+  
+  // =======================================================
+  // ★ 元通りに戻しました。開院前の月は枠を作らずに完全にスキップします。
+  // =======================================================
   const monthEndDate = new Date(parseInt(yStr, 10), parseInt(mStr, 10), 0);
   if (locOpenDate && monthEndDate < locOpenDate) {
     return false; 
@@ -185,12 +187,38 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   let startRow = 0;
   
   if (lastRow > 0) {
-    let searchData = sheet.getRange(1, 1, lastRow, 4).getDisplayValues();
-    for (let i = 0; i < searchData.length; i++) {
-      if (searchData[i][0] === "適用開始" && String(searchData[i][3]).startsWith(yearMonthStr)) {
-        startRow = (i + 1) - 15;
-        if (startRow < 1) startRow = 1;
-        break; 
+    let searchValues = sheet.getRange(1, 1, lastRow, 4).getValues();
+    let targetY = parseInt(yStr, 10);
+    let targetM = parseInt(mStr, 10);
+
+    for (let i = 0; i < searchValues.length; i++) {
+      let cellA = String(searchValues[i][0]).replace(/[\s ]+/g, "");
+      
+      if (cellA.includes("適用開始")) {
+        let dateVal = searchValues[i][3];
+        let cellY = -1, cellM = -1;
+        
+        if (dateVal instanceof Date) {
+          cellY = dateVal.getFullYear();
+          cellM = dateVal.getMonth() + 1;
+        } else {
+          let dStr = String(dateVal);
+          if (dStr.includes(yearMonthStr) || dStr.includes(`${targetY}/${targetM}`)) {
+            cellY = targetY; cellM = targetM;
+          } else {
+            let parsed = new Date(dateVal);
+            if (!isNaN(parsed.getTime())) {
+              cellY = parsed.getFullYear();
+              cellM = parsed.getMonth() + 1;
+            }
+          }
+        }
+        
+        if (cellY === targetY && cellM === targetM) {
+          startRow = (i + 1) - 15;
+          if (startRow < 1) startRow = 1;
+          break; 
+        }
       }
     }
   }
