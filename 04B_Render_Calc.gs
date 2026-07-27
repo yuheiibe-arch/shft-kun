@@ -2,10 +2,9 @@
  * ==========================================
  * 04B_Render_Calc.gs
  * コスト計算・ダッシュボード書き込み・統計初期化
- * ★月曜始まり完全固定パッチ（曜日ズレ最終解決版）
- * ★ダッシュボード8名拡張 ＆ 右側表（L列以降）破壊防止パッチ
- * ★【常勤＋先行応募】のコスト表混入を完全にブロックする最終防衛ライン実装
- * ★ 契約内容の出力フォーマット（【拠点名】毎週〇曜日：XX:XX～XX:XX）最適化
+ * ★ その月に存在しない医師を完全除外するカレンダースキャン実装
+ * ★ 右側表（L列以降）の8pt化・折り返し・網掛け（枠線）自動適用
+ * ★ 表の底の枠線が消える問題（処理順序）を修正
  * ==========================================
  */
 
@@ -54,7 +53,6 @@ function calculateDailyCost(shift, isHoliday, wageDataList) {
   return { hours: hours, cost: dailyCost, appliedRates: appliedRates };
 }
 
-// ★ 修正：ご要望のフォーマット「【今里】毎週水曜日：15:00～19:00」を出力
 function generateShiftString(rawShifts, locationName) {
   let grouped = {};
   rawShifts.forEach(s => {
@@ -81,15 +79,26 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   const values = searchRange.getValues();
   const calcRate = (part, total) => total > 0 ? Math.round((part / total) * 100) + "%" : "0%";
 
+  let activeDocsInCalendar = new Set();
+  for (let r = 0; r < values.length; r++) {
+    let colC = String(values[r][2]).trim();
+    if (colC === "1診目" || colC === "2診目") {
+      for (let c = 3; c <= 14; c++) {
+        let docName = String(values[r][c]).trim();
+        if (docName && !["募集", "休", "休館日", "未開院"].includes(docName) && isNaN(docName.replace(/,/g, ''))) {
+          activeDocsInCalendar.add(docName);
+        }
+      }
+    }
+  }
+
   const writeColMap = {
     "常)1診目コマ数": 4, "常)1診目割合": 4, "平日充足率(9-13)": 4, "平日超募集(9-13)": 4, 
     "土曜充足率(9-13)": 4, "土曜超募集(9-13)": 4, "日曜充足率(9-13)": 4, "日曜超募集(9-13)": 4, 
     "土日充足率(9-13)": 4, "土日超募集(9-13)": 4, "土日祝充足率(9-13)": 4, "土日祝超募集(9-13)": 4, "1診コマ数": 4, "適用開始": 4,
-    
     "非)1診目コマ数": 7, "非)1診目割合": 7, "平日充足率(15-18)": 7, "平日超募集(15-18)": 7, 
     "土曜充足率(15-18)": 7, "土曜超募集(15-18)": 7, "日曜充足率(15-18)": 7, "日曜超募集(15-18)": 7, 
     "土日充足率(15-18)": 7, "土日超募集(15-18)": 7, "土日祝充足率(15-18)": 7, "土日祝超募集(15-18)": 7, "2診確保コマ数": 7, "有効期間": 7,
-    
     "超募集コマ数": 10, "全体超募集率": 10, "平日充足率(18-21)": 10, "平日超募集(18-21)": 10, 
     "土曜充足率(18-21)": 10, "土曜超募集(18-21)": 10, "日曜充足率(18-21)": 10, "日曜超募集(18-21)": 10, 
     "土日充足率(18-21)": 10, "土日超募集(18-21)": 10, "土日祝充足率(18-21)": 10, "土日祝超募集(18-21)": 10, "2診割合": 10
@@ -104,7 +113,7 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   let alignUpdates = []; 
   const MAX_DOCS = 8; 
 
-  const isValidDoc = (d) => d && String(d).trim() !== "休" && isNaN(String(d).trim()) && !String(d).includes("稼働") && !String(d).includes("時給");
+  const isValidDoc = (d) => d && String(d).trim() !== "休" && isNaN(String(d).trim()) && !String(d).includes("稼働") && !String(d).includes("時給") && activeDocsInCalendar.has(d);
 
   const finalJ = (edges && edges.joukin) ? [...new Set(edges.joukin.filter(isValidDoc))] : [...new Set(Array.from(stats.uniqueJoukin || []).filter(isValidDoc))];
   const finalT = (edges && edges.teiki) ? [...new Set(edges.teiki.filter(isValidDoc))] : [...new Set(Array.from(stats.uniqueTeiki || []).filter(isValidDoc))];
@@ -187,17 +196,24 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
       if (cellText === "医師名" && String(values[r][c+1]).trim() === "稼働時間") {
         let totalCost = 0;
         let idx = 0;
-        // シート名から拠点名（2026等の年号やコピーの文字を削除）を自動取得
         let locName = sheet.getName().replace(/[0-9]{4}/, '').replace(' のコピー', '').trim();
         
+        for (let cr = 1; cr <= 14; cr++) {
+          if (r + cr < values.length) {
+            values[r + cr][c] = "";
+            values[r + cr][c + 1] = "";
+            values[r + cr][c + 2] = "";
+            values[r + cr][c + 3] = "";
+            values[r + cr][c + 4] = "";
+          }
+        }
+        
         for (let doc in doctorCosts) {
-          // ★修正：常勤や先行応募の医師がコスト表に混ざるのを完全にブロック
+          if (!activeDocsInCalendar.has(doc)) continue;
           if (finalJ.includes(doc) || finalS.includes(doc)) continue;
 
           let d = doctorCosts[doc];
           let contractDetails = generateShiftString(d.rawShifts, locName);
-          
-          // ★修正：時給の重複（14000/14000等）をなくし、一意にする
           let uniqueRates = [...new Set(d.appliedRates)].sort((a,b) => a - b);
           let rateStr = uniqueRates.length > 0 ? uniqueRates.map(rt => rt.toLocaleString()).join("/") : "時給表どおり";
           
@@ -230,8 +246,24 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   
   searchRange.setValues(values);
   
-  // ★修正：改行された契約内容が綺麗に表示されるよう「折り返し」を設定
   alignUpdates.forEach(update => {
+     // ★修正：先に下部の不要な行の枠線を消し、白紙に戻す
+     if (update.numRows < 14) {
+         sheet.getRange(update.row + update.numRows, update.col, 14 - update.numRows, update.numCols)
+              .setBorder(false, false, false, false, false, false)
+              .setBackground("#ffffff");
+     }
+
+     // ★修正：その「後」に表本体に枠線を引くことで、底の線が消されずに確実に閉じるようにする
+     sheet.getRange(update.row - 1, update.col, update.numRows + 1, update.numCols)
+          .setFontSize(8)
+          .setBorder(true, true, true, true, true, true, null, SpreadsheetApp.BorderStyle.SOLID)
+          .setBackground("#ffffff");
+          
+     // ヘッダー行だけ色を付ける
+     sheet.getRange(update.row - 1, update.col, 1, update.numCols).setBackground("#e4efff");
+
+     // 文字の折り返し
      sheet.getRange(update.row, update.col, update.numRows, update.numCols)
           .setHorizontalAlignment("left")
           .setWrap(true); 
