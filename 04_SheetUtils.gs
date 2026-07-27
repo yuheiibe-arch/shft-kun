@@ -42,7 +42,15 @@ function writeWithProtectionObj(sheetName, newRowObjs, defaultHeaders, checkColN
   existingDataObjs.forEach(rowObj => {
     if (!rowObj[actualHeaders[0]] && !rowObj[actualHeaders[1]]) return;
     const isTarget = isTargetFunc(rowObj);
-    const isChecked = (rowObj[checkColName] === true || String(rowObj[checkColName]).toUpperCase() === "TRUE");
+    
+    // ★ 修正箇所：「対応済」のチェック状態を取得（letに変更）
+    let isChecked = (rowObj[checkColName] === true || String(rowObj[checkColName]).toUpperCase() === "TRUE");
+    
+    // ★ 修正箇所：「作業メモ」列に空白以外の文字があれば保護（isChecked）を強制的にtrueにする
+    if (rowObj["作業メモ"] !== undefined && String(rowObj["作業メモ"]).trim() !== "") {
+      isChecked = true;
+    }
+
     const key = getPrimaryKeyFunc(rowObj);
     
     if (!existingMap.has(key)) existingMap.set(key, rowObj);
