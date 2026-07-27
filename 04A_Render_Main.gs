@@ -33,8 +33,8 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
     globalOverrideRawData = { advance: [], absence: [], substitute: [], kyukan: [] };
     
     try {
-      const MASTER_ID = '10yPdoOOgqSSGKwoiPAXi83YM9vb_Em8r6Ex-bLfg28M';
-      const masterSs = SpreadsheetApp.openById(MASTER_ID);
+      // ★修正：ハードコードされた古いID指定を削除し、直接アクティブなスプレッドシート（今開いているファイル）を取得するように変更
+      const masterSs = SpreadsheetApp.getActiveSpreadsheet();
       
       let sAdv = masterSs.getSheetByName('先行応募'); 
       if(sAdv) globalOverrideRawData.advance = sAdv.getDataRange().getValues();

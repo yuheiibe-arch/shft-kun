@@ -2,7 +2,9 @@
  * ==========================================
  * 04C_Render_Sync.gs
  * 自動同期・条件付き書式の反映・onEditイベント
- * ★プルダウン一括設定（2次元配列による完全爆速版 ＆ 先行応募色塗り追加）
+ * ★ プルダウン一括設定（2次元配列によるユーザー様オリジナル爆速版 完全復活）
+ * ★ ダッシュボードは8列制限（L列保護）、カレンダーは12列適用（色抜け修正）
+ * ★ 【常勤 ＞ 非常勤 ＞ 先行】の優先順位で色を統一
  * ==========================================
  */
 
@@ -21,7 +23,7 @@ function onEdit(e) {
 
   const row = range.getRow();
   const col = range.getColumn();
-  if (col >= 4 && col <= 10) {
+  if (col >= 4 && col <= 11) {
     const labels = sheet.getRange(row, 1, 1, 3).getValues()[0];
     const rowLabelA = String(labels[0]).trim();
     
@@ -50,10 +52,12 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
 
   let alignRanges = [];
   
-  // ====================================================================
-  // ★ ユーザー様考案の最強ロジック復活：2次元配列でルールを構築する
-  // ====================================================================
-  const targetRange = sheet.getRange(1, 4, maxRows, 12); // D列〜O列の全行を一気に取得
+  // ★ ダッシュボード上部（名前一覧）は8列に制限してL列を守る
+  const MAX_DASHBOARD_COLS = 8;
+  // ★ カレンダー（シフト枠）は色抜けを防ぐため12列（D〜O列）まで適用する
+  const CALENDAR_COLS = 12;
+  
+  const targetRange = sheet.getRange(1, 4, maxRows, CALENDAR_COLS); 
   let currentRules = targetRange.getDataValidations();
   let rulesModified = false;
   
@@ -62,42 +66,40 @@ function applyMasterListToAll(sheet, joukinList, teikiList, senkouList) {
     let labelA = String(data[r][0]).trim(); 
     let labelC = String(data[r][2]).trim(); 
     
+    // ダッシュボードへの書き込み（8列のみ）
     if (labelA === "常勤医師") {
-      let vals = new Array(7).fill("");
-      let bgs = new Array(7).fill(emptyColor);
-      for (let i = 0; i < finalJ.length && i < 7; i++) { vals[i] = finalJ[i]; bgs[i] = joukinColor; }
-      sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
+      let vals = new Array(MAX_DASHBOARD_COLS).fill("");
+      let bgs = new Array(MAX_DASHBOARD_COLS).fill(emptyColor);
+      for (let i = 0; i < finalJ.length && i < MAX_DASHBOARD_COLS; i++) { vals[i] = finalJ[i]; bgs[i] = joukinColor; }
+      sheet.getRange(rowNum, 4, 1, MAX_DASHBOARD_COLS).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
     } 
     else if (labelA === "非常勤医師") {
-      let vals = new Array(7).fill("");
-      let bgs = new Array(7).fill(emptyColor);
-      for (let i = 0; i < finalT.length && i < 7; i++) { vals[i] = finalT[i]; bgs[i] = teikiColor; }
-      sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
+      let vals = new Array(MAX_DASHBOARD_COLS).fill("");
+      let bgs = new Array(MAX_DASHBOARD_COLS).fill(emptyColor);
+      for (let i = 0; i < finalT.length && i < MAX_DASHBOARD_COLS; i++) { vals[i] = finalT[i]; bgs[i] = teikiColor; }
+      sheet.getRange(rowNum, 4, 1, MAX_DASHBOARD_COLS).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
     }
-    // ★追加：先行応募の色塗り
     else if (labelA === "先行応募" || labelA === "先行応募医師") {
-      let vals = new Array(7).fill("");
-      let bgs = new Array(7).fill(emptyColor);
-      for (let i = 0; i < finalS.length && i < 7; i++) { vals[i] = finalS[i]; bgs[i] = senkouColor; }
-      sheet.getRange(rowNum, 4, 1, 7).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
+      let vals = new Array(MAX_DASHBOARD_COLS).fill("");
+      let bgs = new Array(MAX_DASHBOARD_COLS).fill(emptyColor);
+      for (let i = 0; i < finalS.length && i < MAX_DASHBOARD_COLS; i++) { vals[i] = finalS[i]; bgs[i] = senkouColor; }
+      sheet.getRange(rowNum, 4, 1, MAX_DASHBOARD_COLS).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
     }
     
+    // カレンダーへのプルダウン設定（12列全て）
     if (labelC === "1診目" || labelC === "2診目") {
       alignRanges.push(`D${rowNum}:O${rowNum}`);
-      // 裏側（メモリ上）で配列にルールをセットする（通信は発生しない）
-      for (let c = 0; c < 12; c++) {
+      for (let c = 0; c < CALENDAR_COLS; c++) {
         currentRules[r][c] = newRule;
       }
       rulesModified = true;
     }
   }
 
-  // 左詰めの一括適用 (RangeListは水平揃えには使用可能)
   if (alignRanges.length > 0) {
     sheet.getRangeList(alignRanges).setHorizontalAlignment("left");
   }
   
-  // ★ 最後に1回だけ、書き換えたルール配列をガバッと被せる（通信1回で終了！）
   if (rulesModified) {
     targetRange.setDataValidations(currentRules);
   }
@@ -116,17 +118,17 @@ function syncSheetIndependent(sheet) {
   for (let r = 0; r < data.length; r++) {
     let rowLabel = String(data[r][0]).trim();
     if (rowLabel === "常勤医師") {
-      for (let c = 3; c <= 9; c++) {
+      for (let c = 3; c <= 10; c++) { 
         let name = String(data[r][c]).trim();
         if (name && name !== "undefined" && name !== "休") joukinList.push(name);
       }
     } else if (rowLabel === "非常勤医師") {
-      for (let c = 3; c <= 9; c++) {
+      for (let c = 3; c <= 10; c++) {
         let name = String(data[r][c]).trim();
         if (name && name !== "undefined" && name !== "休") teikiList.push(name);
       }
     } else if (rowLabel === "先行応募" || rowLabel === "先行応募医師") {
-      for (let c = 3; c <= 9; c++) {
+      for (let c = 3; c <= 10; c++) {
         let name = String(data[r][c]).trim();
         if (name && name !== "undefined" && name !== "休") senkouList.push(name);
       }
@@ -138,14 +140,17 @@ function syncSheetIndependent(sheet) {
 
 function updateSheetWideCF(sheet, joukinList, teikiList, senkouList, maxRows) {
   let rules = [];
-  // 無限範囲(D:O)を辞め、実際のデータ行数までに制限
-  const targetRange = sheet.getRange(1, 4, maxRows, 12); 
+  if (maxRows < 5) return;
+  
+  // ★ 条件付き書式をカレンダー部分（5行目以降）の「12列分（D〜O列）」に適用（色抜け修正）
+  const targetRange = sheet.getRange(5, 4, maxRows - 4, 12); 
 
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("募集").setBackground("#ffff00").setFontColor("#000000").setRanges([targetRange]).build());
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("休").setBackground("#cccccc").setFontColor("#cccccc").setRanges([targetRange]).build());
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("休館日").setBackground("#cccccc").setFontColor("#666666").setRanges([targetRange]).build());
   rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("未開院").setBackground("#e0e0e0").setFontColor("#999999").setRanges([targetRange]).build());
   
+  // ★ 色の優先順位：常勤（肌色）＞ 非常勤（薄紫）＞ 先行（薄緑）
   joukinList.forEach(doc => {
     if(doc) rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(doc).setBackground("#fce5cd").setFontColor("#000000").setRanges([targetRange]).build());
   });
@@ -154,11 +159,12 @@ function updateSheetWideCF(sheet, joukinList, teikiList, senkouList, maxRows) {
     if(doc) rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(doc).setBackground("#d9d2e9").setFontColor("#000000").setRanges([targetRange]).build());
   });
   
-  if(senkouList) {
-    senkouList.forEach(doc => {
-      if(doc) rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(doc).setBackground("#d9ead3").setFontColor("#000000").setRanges([targetRange]).build());
-    });
-  }
+  senkouList.forEach(doc => {
+    // 常勤や非常勤に既に含まれている場合は、薄緑ルールを追加しない（全て緑になるのを回避）
+    if(doc && !joukinList.includes(doc) && !teikiList.includes(doc)) {
+      rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(doc).setBackground("#d9ead3").setFontColor("#000000").setRanges([targetRange]).build());
+    }
+  });
   
   sheet.setConditionalFormatRules(rules);
 }

@@ -3,8 +3,9 @@
  * 04B_Render_Calc.gs
  * コスト計算・ダッシュボード書き込み・統計初期化
  * ★月曜始まり完全固定パッチ（曜日ズレ最終解決版）
- * ★ダッシュボード12名（D〜O列）完全拡張版
- * ★【残存データ完全消去パッチ】ダッシュボード空欄の直接クリア・白紙化処理を追加
+ * ★ダッシュボード8名拡張 ＆ 右側表（L列以降）破壊防止パッチ
+ * ★【常勤＋先行応募】のコスト表混入を完全にブロックする最終防衛ライン実装
+ * ★ 契約内容の出力フォーマット（【拠点名】毎週〇曜日：XX:XX～XX:XX）最適化
  * ==========================================
  */
 
@@ -53,10 +54,11 @@ function calculateDailyCost(shift, isHoliday, wageDataList) {
   return { hours: hours, cost: dailyCost, appliedRates: appliedRates };
 }
 
-function generateShiftString(rawShifts) {
+// ★ 修正：ご要望のフォーマット「【今里】毎週水曜日：15:00～19:00」を出力
+function generateShiftString(rawShifts, locationName) {
   let grouped = {};
   rawShifts.forEach(s => {
-    let key = `${s.start}-${s.end}`;
+    let key = `${s.start}～${s.end}`;
     if (!grouped[key]) grouped[key] = {};
     if (!grouped[key][s.dow]) grouped[key][s.dow] = new Set();
     grouped[key][s.dow].add(s.week);
@@ -65,12 +67,13 @@ function generateShiftString(rawShifts) {
   let results = [];
   for (let timeKey in grouped) {
     for (let dow in grouped[timeKey]) {
-      let weeks = Array.from(grouped[timeKey][dow]).sort();
+      let weeks = Array.from(grouped[timeKey][dow]).sort((a,b)=>a-b);
       let weekStr = weeks.length >= 4 ? "毎週" : "第" + weeks.join("・");
-      results.push(`${timeKey}(${weekStr}${dow})`);
+      let locPrefix = locationName ? `【${locationName}】` : "";
+      results.push(`${locPrefix}${weekStr}${dow}曜日：${timeKey}`);
     }
   }
-  return results.join(", ");
+  return results.join("\n");
 }
 
 function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, wageDataList, senkouDocsArray) {
@@ -96,8 +99,16 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   const teikiColor  = "#d9d2e9"; 
   const senkouColor = "#d9ead3"; 
   const emptyColor  = "#ffffff";
+  const overlapColor = "#fff2cc";
 
   let alignUpdates = []; 
+  const MAX_DOCS = 8; 
+
+  const isValidDoc = (d) => d && String(d).trim() !== "休" && isNaN(String(d).trim()) && !String(d).includes("稼働") && !String(d).includes("時給");
+
+  const finalJ = (edges && edges.joukin) ? [...new Set(edges.joukin.filter(isValidDoc))] : [...new Set(Array.from(stats.uniqueJoukin || []).filter(isValidDoc))];
+  const finalT = (edges && edges.teiki) ? [...new Set(edges.teiki.filter(isValidDoc))] : [...new Set(Array.from(stats.uniqueTeiki || []).filter(isValidDoc))];
+  const finalS = senkouDocsArray ? [...new Set(senkouDocsArray.filter(isValidDoc))] : [];
 
   for (let r = 0; r < values.length; r++) {
     for (let c = 0; c < values[r].length; c++) {
@@ -144,49 +155,51 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
         values[r][targetCol - 1] = writeVal;
       }
 
-      // =========================================================
-      // ★ 最強残像消去パッチ: シートに直接 `setValues` を行い、強制的に白紙化する
-      // =========================================================
       if (cellText === "常勤医師") {
-        let docs = Array.from(stats.uniqueJoukin);
-        let vals = new Array(12).fill("");
-        let bgs = new Array(12).fill(emptyColor);
-        for (let i = 0; i < 12; i++) { 
-          if (i < docs.length) { vals[i] = docs[i]; bgs[i] = joukinColor; }
+        let bgs = new Array(MAX_DOCS).fill(emptyColor);
+        for (let i = 0; i < MAX_DOCS; i++) { 
+          values[r][3 + i] = (i < finalJ.length) ? finalJ[i] : ""; 
+          if (i < finalJ.length) {
+             bgs[i] = finalS.includes(finalJ[i]) ? overlapColor : joukinColor;
+          }
         }
-        sheet.getRange(startRow + r, 4, 1, 12).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
+        sheet.getRange(startRow + r, 4, 1, MAX_DOCS).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
       
       if (cellText === "非常勤医師") {
-        let docs = Array.from(stats.uniqueTeiki);
-        let vals = new Array(12).fill("");
-        let bgs = new Array(12).fill(emptyColor);
-        for (let i = 0; i < 12; i++) { 
-          if (i < docs.length) { vals[i] = docs[i]; bgs[i] = teikiColor; }
+        let bgs = new Array(MAX_DOCS).fill(emptyColor);
+        for (let i = 0; i < MAX_DOCS; i++) { 
+          values[r][3 + i] = (i < finalT.length) ? finalT[i] : "";
+          bgs[i] = (i < finalT.length) ? teikiColor : emptyColor;
         }
-        sheet.getRange(startRow + r, 4, 1, 12).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
+        sheet.getRange(startRow + r, 4, 1, MAX_DOCS).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
       
       if (cellText === "先行応募" || cellText === "先行応募医師") {
-        let docs = senkouDocsArray || [];
-        let vals = new Array(12).fill("");
-        let bgs = new Array(12).fill(emptyColor);
-        for (let i = 0; i < 12; i++) { 
-          if (i < docs.length) { vals[i] = docs[i]; bgs[i] = senkouColor; }
+        let bgs = new Array(MAX_DOCS).fill(emptyColor);
+        for (let i = 0; i < MAX_DOCS; i++) { 
+          values[r][3 + i] = (i < finalS.length) ? finalS[i] : "";
+          bgs[i] = (i < finalS.length) ? senkouColor : emptyColor;
         }
-        sheet.getRange(startRow + r, 4, 1, 12).setValues([vals]).setBackgrounds([bgs]).setHorizontalAlignment("left");
+        sheet.getRange(startRow + r, 4, 1, MAX_DOCS).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
-      // =========================================================
 
       if (cellText === "医師名" && String(values[r][c+1]).trim() === "稼働時間") {
         let totalCost = 0;
         let idx = 0;
+        // シート名から拠点名（2026等の年号やコピーの文字を削除）を自動取得
+        let locName = sheet.getName().replace(/[0-9]{4}/, '').replace(' のコピー', '').trim();
         
         for (let doc in doctorCosts) {
+          // ★修正：常勤や先行応募の医師がコスト表に混ざるのを完全にブロック
+          if (finalJ.includes(doc) || finalS.includes(doc)) continue;
+
           let d = doctorCosts[doc];
-          let contractDetails = generateShiftString(d.rawShifts);
-          let sortedRates = Array.from(d.appliedRates).sort((a,b) => a - b);
-          let rateStr = sortedRates.length > 0 ? sortedRates.map(r => r.toLocaleString()).join("/") : "時給表どおり";
+          let contractDetails = generateShiftString(d.rawShifts, locName);
+          
+          // ★修正：時給の重複（14000/14000等）をなくし、一意にする
+          let uniqueRates = [...new Set(d.appliedRates)].sort((a,b) => a - b);
+          let rateStr = uniqueRates.length > 0 ? uniqueRates.map(rt => rt.toLocaleString()).join("/") : "時給表どおり";
           
           if (r + 1 + idx < values.length) {
             values[r + 1 + idx][c] = `${doc}（定非）`;
@@ -215,12 +228,13 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
     }
   }
   
-  // 値の一括書き戻し
   searchRange.setValues(values);
   
-  // 配置の更新
+  // ★修正：改行された契約内容が綺麗に表示されるよう「折り返し」を設定
   alignUpdates.forEach(update => {
-     sheet.getRange(update.row, update.col, update.numRows, update.numCols).setHorizontalAlignment("left");
+     sheet.getRange(update.row, update.col, update.numRows, update.numCols)
+          .setHorizontalAlignment("left")
+          .setWrap(true); 
   });
 }
 

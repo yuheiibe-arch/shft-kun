@@ -2,6 +2,7 @@
  * ==========================================
  * 00_SmartSync.gs
  * 差分チェックとスマート更新（順不同対応・超絶爆速版）
+ * ★外部3ファイル分散出力の監視対応版
  * ==========================================
  */
 
@@ -14,15 +15,30 @@ function checkAndStartSmartSync(year, term) {
   monitor.getRange("A1:B1").setValue("⚡ 変更箇所（差分）を爆速チェックしています...\nそのままお待ちください...");
 
   let existingLocs = [];
-  ss.getSheets().forEach(s => {
-    let name = s.getName();
-    if (name.startsWith(year)) {
-      existingLocs.push(name.replace(year, ''));
+  
+  // ★修正：マスタではなく、外部の3ファイルから出力済みシートをかき集める
+  const TARGET_IDS = [
+    "1rScroDlMNiRxThbaxGEuvhyCH2b9RoM6BadNSCAWsvI", // 東京埼玉
+    "19Q-xVsMX0thz_rvmdo_GERJvhjFLQgw2pUkWaTYxQhE", // 関東
+    "1fIFvTck_g9-Hp8MSpY7hIWwE5L2buJjBHIY4GBEf_MY"  // 関西
+  ];
+  
+  TARGET_IDS.forEach(id => {
+    try {
+      let extSs = SpreadsheetApp.openById(id);
+      extSs.getSheets().forEach(s => {
+        let name = s.getName();
+        if (name.startsWith(year)) {
+          existingLocs.push(name.replace(year, ''));
+        }
+      });
+    } catch(e) {
+      console.warn("外部ファイルの読み込みに失敗しました: " + id);
     }
   });
 
   if (existingLocs.length === 0) {
-    monitor.getRange("A1:B1").setValue("⚠️ 対象年度のシートが見つかりませんでした。").setBackground("#ea4335");
+    monitor.getRange("A1:B1").setValue("⚠️ 対象年度のシートが外部ファイルに見つかりませんでした。").setBackground("#ea4335");
     return;
   }
 
@@ -77,14 +93,12 @@ function getMasterRawData(year) {
   });
 
   try {
-    // ★ここを safeOpenByUrl に変更（休館日マスタ）
     const kyuSs = safeOpenByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
     const kyuSheet = kyuSs.getSheetByName("休館日");
     if (kyuSheet) cache['休館日'] = kyuSheet.getDataRange().getValues();
   } catch(e) {}
 
   try {
-    // ★ここを safeOpenByUrl に変更（医師契約マスタ）
     const masterSs = safeOpenByUrl('https://docs.google.com/spreadsheets/d/1aEjphEv_63SeWQmwiOy9sx7IrMfawU01sHbKd_Ki4iA/edit');
     ['常勤', '定期非常勤'].forEach(type => {
       let sheet = masterSs.getSheetByName(`${type}${year}年度`);
@@ -126,11 +140,6 @@ function computeStableHash(year, subLocName, rawCache) {
   return txtHash;
 }
 
-/**
- * ==========================================
- * 外部シートからの自動更新リクエストを受け取るWeb API
- * ==========================================
- */
 function doGet(e) {
   try {
     let targetYear = e.parameter.year;
@@ -139,8 +148,9 @@ function doGet(e) {
     if (!targetYear) {
       const ss = SpreadsheetApp.getActiveSpreadsheet();
       let maxYear = 0;
+      // doGet時の年度取得もマスタ基準に変更
       ss.getSheets().forEach(s => {
-        const match = s.getName().match(/^(\d{4})/);
+        const match = s.getName().match(/^(?:常勤|定期非常勤|)(\d{4})/);
         if (match) {
           const y = parseInt(match[1], 10);
           if (y > maxYear) maxYear = y;
@@ -150,12 +160,10 @@ function doGet(e) {
     }
 
     if (targetYear !== "0") {
-      // ★修正：doGetの中で重い処理を絶対にさせない（2分タイムアウトの完全回避）
       let props = PropertiesService.getScriptProperties();
       props.setProperty('PENDING_DO_GET_YEAR', targetYear);
       props.setProperty('PENDING_DO_GET_TARGETS', targetsStr || "");
 
-      // 重複実行を防ぐため、古いトリガーがあれば削除
       const triggers = ScriptApp.getProjectTriggers();
       triggers.forEach(t => {
         if (t.getHandlerFunction() === 'processDoGetBackground') {
@@ -163,22 +171,16 @@ function doGet(e) {
         }
       });
 
-      // 1秒後に裏側（バックグラウンド）で処理を開始させる
       ScriptApp.newTrigger('processDoGetBackground').timeBased().after(1000).create();
     }
     
-    // 外部システムには即座（1秒以内）に完了の返事をして通信を終わらせる
     return ContentService.createTextOutput("Success: Received and starting background process.");
   } catch (error) {
     return ContentService.createTextOutput("Error: " + error.message);
   }
 }
 
-/**
- * ★ Webアプリからバトンタッチされて裏側で動く関数（制限時間が「2分」から通常の「6分」に延びる）
- */
 function processDoGetBackground() {
-  // トリガーの掃除
   const triggers = ScriptApp.getProjectTriggers();
   triggers.forEach(t => {
     if (t.getHandlerFunction() === 'processDoGetBackground') {
@@ -196,10 +198,18 @@ function processDoGetBackground() {
     let rawTargets = targetsStr.split(",");
     let finalTargets = new Set();
     
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
     let existingLocs = [];
-    ss.getSheets().forEach(s => {
-      if (s.getName().startsWith(targetYear)) existingLocs.push(s.getName().replace(targetYear, ''));
+    const TARGET_IDS = [
+      "1rScroDlMNiRxThbaxGEuvhyCH2b9RoM6BadNSCAWsvI", 
+      "19Q-xVsMX0thz_rvmdo_GERJvhjFLQgw2pUkWaTYxQhE", 
+      "1fIFvTck_g9-Hp8MSpY7hIWwE5L2buJjBHIY4GBEf_MY"  
+    ];
+    TARGET_IDS.forEach(id => {
+      try {
+        SpreadsheetApp.openById(id).getSheets().forEach(s => {
+          if (s.getName().startsWith(targetYear)) existingLocs.push(s.getName().replace(targetYear, ''));
+        });
+      } catch(e) {}
     });
 
     rawTargets.forEach(rt => {
@@ -219,32 +229,23 @@ function processDoGetBackground() {
     }
   }
 
-  // ターゲットの指定がない場合は従来のスマート更新
   checkAndStartSmartSync(targetYear, "通年");
 }
-// ==========================================
-// 【夜間バッチ】スマート更新の自動定期実行用
-// ==========================================
+
 function triggerNightlySmartSync() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let maxYear = 0;
   
-  // 作成済みのシート名から「最新年度」を自動取得
   ss.getSheets().forEach(s => {
-    const match = s.getName().match(/^(\d{4})/);
+    const match = s.getName().match(/^(?:常勤|定期非常勤|)(\d{4})/);
     if (match) {
       const y = parseInt(match[1], 10);
       if (y > maxYear) maxYear = y;
     }
   });
   
-  if (maxYear === 0) {
-    console.log("対象の年度シートが見つからないためスキップします。");
-    return;
-  }
+  if (maxYear === 0) return;
   
   console.log(`🌙 夜間スマート更新を開始します: ${maxYear}年度 / 通年`);
-  
-  // スマート更新のコアエンジンを起動（制限時間6分をフル活用）
   checkAndStartSmartSync(String(maxYear), "通年");
 }

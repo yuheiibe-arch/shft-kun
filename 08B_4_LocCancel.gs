@@ -118,3 +118,74 @@ function _processGroupedSingles(ctx) {
     }
   }
 }
+/**
+ * ====================================================================
+ * 08B_4_LocCancel.gs
+ * 欠勤・有給・休館日によるシフトキャンセルリストの作成
+ * ====================================================================
+ */
+
+function _processLocCancel(ctx, locCtx) {
+  let { cleanLocName, category, displayLoc, area, locDicts, activeContracts } = locCtx;
+
+  // 1. お休み情報（欠勤・有給など）の処理
+  for (let dStr in locDicts.absences) {
+    let dayAbsences = locDicts.absences[dStr];
+    
+    dayAbsences.forEach(abs => {
+      // 抽出対象の理由のみフィルタリング
+      if (["欠勤", "有給", "時短", "祝日", "年末年始"].includes(abs.reason)) {
+        let docName = String(abs.docName).replace(/[\s ]+/g, "").replace(/先生$/, "").trim();
+        let doctor = `${docName}先生`;
+        let dObj = new Date(dStr);
+        let dateStrFormatted = Utilities.formatDate(dObj, Session.getScriptTimeZone(), "yyyy年MM月dd日");
+        let timeStr = `${('0'+abs.sH).slice(-2)}:00〜${('0'+abs.eH).slice(-2)}:00`;
+
+        ctx.cancelList.push({
+          "エリア": area,
+          "医師名": doctor,
+          "該当日": dateStrFormatted,
+          "理由": abs.reason,
+          "対象拠点": displayLoc,
+          "対象勤務時間": timeStr,
+          "募集シフト作成指示": "", // 今回の仕様に合わせて空欄
+          "対応済": false,
+          "対応者": "",
+          "GASチェック": false
+        });
+      }
+    });
+  }
+
+  // 2. 休館日の処理（定期シフトが入っているのに休館日になった場合）
+  for (let dStr in locDicts.kyukans) {
+    let dObj = new Date(dStr);
+    // その日がカレンダーの範囲内か確認
+    let cDay = ctx.calendarCache.find(c => c.getTime === dObj.getTime());
+    
+    if (cDay) {
+      activeContracts.forEach(c => {
+        // その休館日に本来シフトが入っていた医師を抽出
+        if (_isContractActiveOnCache(c, cDay)) {
+          let docNameClean = String(c.docName).replace(/[\s ]+/g, "").replace(/先生$/, "").trim();
+          let doctor = `${docNameClean}先生`;
+          let dateStrFormatted = Utilities.formatDate(dObj, Session.getScriptTimeZone(), "yyyy年MM月dd日");
+          let timeStr = `${('0'+c.sH).slice(-2)}:00〜${('0'+c.eH).slice(-2)}:00`;
+
+          ctx.cancelList.push({
+            "エリア": area,
+            "医師名": doctor,
+            "該当日": dateStrFormatted,
+            "理由": "休館日",
+            "対象拠点": displayLoc,
+            "対象勤務時間": timeStr,
+            "募集シフト作成指示": "",
+            "対応済": false,
+            "対応者": "",
+            "GASチェック": false
+          });
+        }
+      });
+    }
+  }
+}
