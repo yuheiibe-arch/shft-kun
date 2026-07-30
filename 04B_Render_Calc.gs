@@ -2,9 +2,8 @@
  * ==========================================
  * 04B_Render_Calc.gs
  * コスト計算・ダッシュボード書き込み・統計初期化
- * ★ その月に存在しない医師を完全除外するカレンダースキャン実装
- * ★ 右側表（L列以降）の8pt化・折り返し・網掛け（枠線）自動適用
- * ★ 表の底の枠線が消える問題（処理順序）を修正
+ * ★ カレンダースキャン・枠線自動とじ込み実装
+ * ★ 【修正】誤爆防止のため、ラベルとコスト表の反応列を完全に固定（A列およびL列のみ）
  * ==========================================
  */
 
@@ -164,7 +163,8 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
         values[r][targetCol - 1] = writeVal;
       }
 
-      if (cellText === "常勤医師") {
+      // ★ 修正点1: 「常勤・非常勤医師」のラベルはA列（c === 0）の場合のみ反応させる
+      if (c === 0 && cellText === "常勤医師") {
         let bgs = new Array(MAX_DOCS).fill(emptyColor);
         for (let i = 0; i < MAX_DOCS; i++) { 
           values[r][3 + i] = (i < finalJ.length) ? finalJ[i] : ""; 
@@ -175,7 +175,7 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
         sheet.getRange(startRow + r, 4, 1, MAX_DOCS).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
       
-      if (cellText === "非常勤医師") {
+      if (c === 0 && cellText === "非常勤医師") {
         let bgs = new Array(MAX_DOCS).fill(emptyColor);
         for (let i = 0; i < MAX_DOCS; i++) { 
           values[r][3 + i] = (i < finalT.length) ? finalT[i] : "";
@@ -184,7 +184,7 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
         sheet.getRange(startRow + r, 4, 1, MAX_DOCS).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
       
-      if (cellText === "先行応募" || cellText === "先行応募医師") {
+      if (c === 0 && (cellText === "先行応募" || cellText === "先行応募医師")) {
         let bgs = new Array(MAX_DOCS).fill(emptyColor);
         for (let i = 0; i < MAX_DOCS; i++) { 
           values[r][3 + i] = (i < finalS.length) ? finalS[i] : "";
@@ -193,7 +193,8 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
         sheet.getRange(startRow + r, 4, 1, MAX_DOCS).setBackgrounds([bgs]).setHorizontalAlignment("left");
       }
 
-      if (cellText === "医師名" && String(values[r][c+1]).trim() === "稼働時間") {
+      // ★ 修正点2: コスト表の出力は、必ずL列（c === 11）にあるヘッダーの下にしか出さない
+      if (c === 11 && cellText === "医師名" && String(values[r][c+1]).trim() === "稼働時間") {
         let totalCost = 0;
         let idx = 0;
         let locName = sheet.getName().replace(/[0-9]{4}/, '').replace(' のコピー', '').trim();
@@ -247,23 +248,19 @@ function writeDashboardInfo(sheet, startRow, endRow, edges, stats, doctorCosts, 
   searchRange.setValues(values);
   
   alignUpdates.forEach(update => {
-     // ★修正：先に下部の不要な行の枠線を消し、白紙に戻す
      if (update.numRows < 14) {
          sheet.getRange(update.row + update.numRows, update.col, 14 - update.numRows, update.numCols)
               .setBorder(false, false, false, false, false, false)
               .setBackground("#ffffff");
      }
 
-     // ★修正：その「後」に表本体に枠線を引くことで、底の線が消されずに確実に閉じるようにする
      sheet.getRange(update.row - 1, update.col, update.numRows + 1, update.numCols)
           .setFontSize(8)
           .setBorder(true, true, true, true, true, true, null, SpreadsheetApp.BorderStyle.SOLID)
           .setBackground("#ffffff");
           
-     // ヘッダー行だけ色を付ける
      sheet.getRange(update.row - 1, update.col, 1, update.numCols).setBackground("#e4efff");
 
-     // 文字の折り返し
      sheet.getRange(update.row, update.col, update.numRows, update.numCols)
           .setHorizontalAlignment("left")
           .setWrap(true); 

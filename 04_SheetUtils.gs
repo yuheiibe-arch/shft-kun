@@ -134,12 +134,7 @@ function writeWithProtectionObj(sheetName, newRowObjs, defaultHeaders, checkColN
     return 0;
   });
 
-  // ==============================================================================
-  // ★重要変更箇所：事前の clearContent を廃止しました。
-  // ==============================================================================
-  
   if (finalDataObjs.length === 0) {
-    // 新しいデータが空の場合のみ、既存のデータをクリアして終了
     if (lastRow > 1) {
       sheet.getRange(2, 1, lastRow - 1, sheet.getMaxColumns()).clearContent().clearDataValidations();
     }
@@ -154,7 +149,6 @@ function writeWithProtectionObj(sheetName, newRowObjs, defaultHeaders, checkColN
   if (sheet.getMaxRows() < 1 + numRows) sheet.insertRowsAfter(sheet.getMaxRows(), (1 + numRows) - sheet.getMaxRows());
   if (sheet.getMaxColumns() < numCols) sheet.insertColumnsAfter(sheet.getMaxColumns(), numCols - sheet.getMaxColumns());
 
-  // システムが知らない列にはnullをセット
   const writeData = finalDataObjs.map(obj => {
     return actualHeaders.map(h => {
       if (obj[h] !== undefined) return obj[h]; 
@@ -163,7 +157,6 @@ function writeWithProtectionObj(sheetName, newRowObjs, defaultHeaders, checkColN
     });
   });
 
-  // ★安全な上書き実行（ここでタイムアウトしても、古いデータが残ったままなので白紙になりません）
   const targetRange = sheet.getRange(2, 1, numRows, actualHeaders.length);
   targetRange.setValues(writeData).setHorizontalAlignment("left").setVerticalAlignment("top");
 
@@ -177,13 +170,11 @@ function writeWithProtectionObj(sheetName, newRowObjs, defaultHeaders, checkColN
     }
   });
 
-  // ★書き込み成功後、もし古いデータの方が長くて下に残骸がはみ出している場合、その残骸だけを消去する
   if (lastRow - 1 > numRows) {
     const excessRows = (lastRow - 1) - numRows;
     sheet.getRange(2 + numRows, 1, excessRows, sheet.getMaxColumns()).clearContent().clearDataValidations();
   }
 
-  // シート下部の余分な空白行を削除して整える
   const finalMaxRows = sheet.getMaxRows();
   const neededRows = Math.max(2, 1 + numRows);
   if (finalMaxRows > neededRows) {
@@ -208,9 +199,12 @@ function _readFlatSheet(ss, sheetName, isAbsence) {
     let d = new Date(dVal);
     if (isNaN(d.getTime())) continue;
     
+    let loc = String(data[i][4]).trim();
+    // ★ 修正箇所：拠点名が空欄の場合は、全拠点に誤爆しないようここで強制スキップする
+    if (!loc || loc === "") continue;
+
     let sH = parseInt(String(data[i][2] instanceof Date ? Utilities.formatDate(data[i][2], "JST", "HH:mm") : data[i][2]).split(":")[0], 10);
     let eH = parseInt(String(data[i][3] instanceof Date ? Utilities.formatDate(data[i][3], "JST", "HH:mm") : data[i][3]).split(":")[0], 10);
-    let loc = String(data[i][4]).trim();
     let reason = String(data[i][5]).trim();
     
     let docRaw = isAbsence ? (String(data[i][6]).trim() || String(data[i][5]).trim()) : String(data[i][5]).trim();
@@ -230,7 +224,6 @@ function _readFlatSheet(ss, sheetName, isAbsence) {
 function _readKyukanFlat() {
   const map = [];
   try {
-    // ★ここを safeOpenByUrl に変更
     const kyuSs = safeOpenByUrl("https://docs.google.com/spreadsheets/d/1cbeXWojsxNMhQUo1c6VflF5hLUJUyfuOXCFbGP5jJEA/edit");
     const kyuSheet = kyuSs.getSheetByName("休館日");
     if (kyuSheet) {
