@@ -4,6 +4,7 @@
  * 外部シートからのデータ取得・解析・構造化
  * ★空白除去＆完全同一人物認識・強化版
  * ★セル内改行（複数シフト）の完全読み取り対応版
+ * ★【追加】同セル内に「契約」と「確定」が混在する場合、「契約」行を優先抽出する機能
  * ==========================================
  */
 
@@ -145,7 +146,17 @@ function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locat
         if (!cellVal || String(cellVal).trim() === "" || String(cellVal).trim() === "休") return;
         
         const rawCellText = String(cellVal).trim();
-        const lines = rawCellText.split(/\r\n|\n|\r/);
+        let lines = rawCellText.split(/\r\n|\n|\r/);
+        
+        // ==========================================
+        // ★追加：セル内に「契約」と「確定」などが混在している場合、
+        // 「契約」が含まれる行のみを抽出して優先する。
+        // （別拠点の兼務で「契約」が2行ある場合は両方残る）
+        // ==========================================
+        const contractLines = lines.filter(line => line.includes("契約"));
+        if (contractLines.length > 0) {
+          lines = contractLines;
+        }
         
         lines.forEach(shiftStr => {
           shiftStr = shiftStr.trim();

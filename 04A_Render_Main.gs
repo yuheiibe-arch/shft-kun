@@ -11,6 +11,7 @@
  * ★【修正】isHoliday未定義エラー完全修正版
  * ★【重大修正】先行応募・お休み・振替データを強制的にマスタ本体から取得するよう修正
  * ★【バグ修正】更新時に月が前後する問題を解決する最強検索ロジック適用版
+ * ★【追加】月の並び順を「4月始まり」で正しく保つ割り込み挿入ロジック適用版
  * ==========================================
  */
 
@@ -33,7 +34,6 @@ function getShiftOverrides(ss, originalLocName, cleanLocName, yearMonthStr) {
     globalOverrideRawData = { advance: [], absence: [], substitute: [], kyukan: [] };
     
     try {
-      // ★修正：ハードコードされた古いID指定を削除し、直接アクティブなスプレッドシート（今開いているファイル）を取得するように変更
       const masterSs = SpreadsheetApp.getActiveSpreadsheet();
       
       let sAdv = masterSs.getSheetByName('先行応募'); 
@@ -146,9 +146,6 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   const locOpenDate = globalOpenDatesCache[cleanLocName];
   const [yStr, mStr] = yearMonthStr.split('/');
   
-  // =======================================================
-  // ★ 元通りに戻しました。開院前の月は枠を作らずに完全にスキップします。
-  // =======================================================
   const monthEndDate = new Date(parseInt(yStr, 10), parseInt(mStr, 10), 0);
   if (locOpenDate && monthEndDate < locOpenDate) {
     return false; 
@@ -186,6 +183,11 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   let lastRow = sheet.getLastRow();
   let startRow = 0;
   
+  // =========================================
+  // ▼ 修正：既存月のブロック位置を記憶し、カレンダー順で正しい位置に挿入する
+  // =========================================
+  let existingBlocks = [];
+
   if (lastRow > 0) {
     let searchValues = sheet.getRange(1, 1, lastRow, 4).getValues();
     let targetY = parseInt(yStr, 10);
@@ -202,21 +204,22 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
           cellY = dateVal.getFullYear();
           cellM = dateVal.getMonth() + 1;
         } else {
-          let dStr = String(dateVal);
-          if (dStr.includes(yearMonthStr) || dStr.includes(`${targetY}/${targetM}`)) {
+          let parsed = new Date(dateVal);
+          if (!isNaN(parsed.getTime())) {
+            cellY = parsed.getFullYear();
+            cellM = parsed.getMonth() + 1;
+          } else if (String(dateVal).includes(`${targetY}/${targetM}`)) {
             cellY = targetY; cellM = targetM;
-          } else {
-            let parsed = new Date(dateVal);
-            if (!isNaN(parsed.getTime())) {
-              cellY = parsed.getFullYear();
-              cellM = parsed.getMonth() + 1;
-            }
           }
         }
         
+        let blockStart = Math.max(1, (i + 1) - 15);
+        if (cellY !== -1 && cellM !== -1) {
+          existingBlocks.push({ year: cellY, month: cellM, startRow: blockStart });
+        }
+        
         if (cellY === targetY && cellM === targetM) {
-          startRow = (i + 1) - 15;
-          if (startRow < 1) startRow = 1;
+          startRow = blockStart;
           break; 
         }
       }
@@ -224,9 +227,33 @@ function renderShiftBlock(ss, originalLocName, finalSheetName, yearMonthStr, mon
   }
   
   if (startRow === 0) {
-    startRow = lastRow === 0 ? 1 : lastRow + 4;
     isNewBlock = true;
+
+    if (existingBlocks.length === 0) {
+      startRow = 1;
+    } else {
+      // 4月=0, 5月=1 ... 3月=11 となるように年度スコアを算出
+      const getFiscalScore = (y, m) => (y * 100) + (m >= 4 ? m - 4 : m + 8);
+      let targetScore = getFiscalScore(parseInt(yStr, 10), parseInt(mStr, 10));
+
+      // 既存の月ブロックをカレンダー順にソート
+      existingBlocks.sort((a, b) => getFiscalScore(a.year, a.month) - getFiscalScore(b.year, b.month));
+
+      // 自分より未来の月が始まるインデックスを探す
+      let insertIndex = existingBlocks.findIndex(blk => getFiscalScore(blk.year, blk.month) > targetScore);
+
+      if (insertIndex === -1) {
+        // すべての既存月より未来の場合：一番下に追記
+        startRow = lastRow === 0 ? 1 : lastRow + 4;
+      } else {
+        // 既存月の間に割り込む場合：未来のブロックの上にスペースを挿入して割り込む
+        startRow = existingBlocks[insertIndex].startRow;
+        let requiredRows = tempRange.getNumRows() + 4; // 1ヶ月分に必要な行数を確保
+        sheet.insertRowsBefore(startRow, requiredRows);
+      }
+    }
   }
+  // =========================================
   
   let blockEndRow = startRow + tempRange.getNumRows() - 1;
   const requiredRows = blockEndRow + 10;

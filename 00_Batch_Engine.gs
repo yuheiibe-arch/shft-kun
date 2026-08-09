@@ -4,6 +4,7 @@
  * バックグラウンドのバッチ処理・キュー管理
  * ★【完全体】3ファイル自動振り分け＆直接書き出しモデル
  * ★【リンク切れ防止】バッチ完了時に目次自動更新機能(RUN_INDEX_UPDATE)を連動
+ * ★【追加】手動実行時等にシートを一から作り直す強制リセット(forceReset)機能搭載版
  * ==========================================
  */
 
@@ -180,9 +181,19 @@ function processBatchQueue() {
   const currentDate = new Date();
   const currentMonthNum = currentDate.getMonth() + 1;
   const currentYearNum = currentDate.getFullYear();
-  const sheetExists = targetSs.getSheetByName(finalSheetName) !== null; // ★ 外部ファイル側に存在するかチェック
+  
+  // =========================================
+  // ▼ 修正：強制リセット機能の追加
+  // =========================================
+  let sheetExists = targetSs.getSheetByName(finalSheetName) !== null;
 
-  if (sheetExists) {
+  if (queue.forceReset && sheetExists && queue.currentMonthIndex === 0) {
+    let oldSheet = targetSs.getSheetByName(finalSheetName);
+    targetSs.deleteSheet(oldSheet);
+    sheetExists = false; // 消去したので新規作成扱いにする
+  }
+
+  if (sheetExists && !queue.forceReset) {
     let currentYearMonthVal = (currentYearNum * 100) + currentMonthNum;
     targetMonths = targetMonths.filter(monthStr => {
       let parts = monthStr.split('/');
@@ -190,6 +201,7 @@ function processBatchQueue() {
       return targetYearMonthVal >= currentYearMonthVal;
     });
   }
+  // =========================================
 
   if (queue.currentMonthIndex === 0 && typeof updateProgressMonitor === 'function') {
     let remainMin = Math.ceil((queue.locations.length * Math.max(1, targetMonths.length)) * 0.1); 
