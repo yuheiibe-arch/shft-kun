@@ -16,7 +16,16 @@ function _processLocBoshu(ctx, locCtx) {
     weeklyGrid[dow][5].clear(); 
     if (cleanLocName === "北葛西") weeklyGrid[dow][11].clear();
   });
+  
   activeContracts.forEach(c => {
+    // ========================================================
+    // ★ 修正箇所：退職日・契約期間による募集枠ブロックの解除
+    // 今回の出力期間の開始日より「前」に退職（契約終了）している場合、
+    // または終了日より「後」に契約開始する場合は、グリッドから削らない（＝募集枠として空ける）
+    // ========================================================
+    if (c.validTo && c.validTo.getTime() < actualStartDate.getTime()) return;
+    if (c.validFrom && c.validFrom.getTime() > ctx.endDate.getTime()) return;
+
     for (let h = c.sH; h < c.eH; h++) {
       let idx = h - 9;
       if (idx >= 0 && idx < 12 && idx !== 4 && idx !== 5) {
@@ -24,6 +33,7 @@ function _processLocBoshu(ctx, locCtx) {
       }
     }
   });
+  
   ctx.dowNames.forEach(dow => {
     _extractWeeklyBlocks(weeklyGrid[dow]).forEach(b => {
       const wage = _getWageWrapper(ctx.startDStr, cleanLocName, category, dow, b.sH, b.eH);
