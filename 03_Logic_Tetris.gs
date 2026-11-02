@@ -2,6 +2,7 @@
  * ==========================================
  * 03_Logic_Tetris.gs
  * シフトのパズル配置（1診目・2診目のテトリスロジック）
+ * ★同一医師が1診目・2診目に分身して重複配置されるバグの完全防止版
  * ==========================================
  */
 
@@ -27,13 +28,18 @@ function calculateTetrisAllocation(dailyShifts, locationName) {
 
   // もしその日に誰もシフトが入っていなければ、後続の空き枠埋め処理へ直行
   if (dailyShifts && dailyShifts.length > 0) {
+    // ★追加：時間帯の解析と、同一医師の重複シフト（上書き変更など）の事前整理
+    let parsedShifts = [];
+
     dailyShifts.forEach(shift => {
-      docTypes[shift.doctorName] = shift.type; // 属性を記録
-      
+      if (!shift || !shift.doctorName) return;
+      const cleanDocName = String(shift.doctorName).replace(/[\s ]+/g, "").replace(/先生$/, "");
+      docTypes[cleanDocName] = shift.type; // 属性を記録
+
       let startHour = 9;
       let endHour = 18;
 
-      // ★修正：開始時間の安全な取得（Dateオブジェクト、文字列、数値すべてに対応）
+      // 開始時間の安全な取得（Dateオブジェクト、文字列、数値すべてに対応）
       if (shift.startTime instanceof Date) {
         startHour = shift.startTime.getHours();
       } else if (shift.startTime) {
@@ -47,7 +53,7 @@ function calculateTetrisAllocation(dailyShifts, locationName) {
         startHour = shift.startHour;
       }
 
-      // ★修正：終了時間の安全な取得
+      // 終了時間の安全な取得
       if (shift.endTime instanceof Date) {
         endHour = shift.endTime.getHours();
       } else if (shift.endTime) {
@@ -60,21 +66,39 @@ function calculateTetrisAllocation(dailyShifts, locationName) {
       } else if (shift.hours !== undefined) {
         endHour = startHour + shift.hours;
       }
-      
+
       // 万が一NaNになった場合のフェイルセーフ
       if (isNaN(startHour)) startHour = 9;
       if (isNaN(endHour)) endHour = startHour;
 
-      // 時間帯をインデックス(0〜11)に変換してマス目を埋める
-      for (let h = startHour; h < endHour; h++) {
+      // ★同一医師で時間帯が重なるシフトが既にある場合は、後から来たデータ（変更・振替等）で上書きする
+      const overlapIdx = parsedShifts.findIndex(ps => 
+        ps.doctorName === cleanDocName && (startHour < ps.endHour && endHour > ps.startHour)
+      );
+
+      if (overlapIdx !== -1) {
+        parsedShifts[overlapIdx] = { doctorName: cleanDocName, startHour: startHour, endHour: endHour };
+      } else {
+        parsedShifts.push({ doctorName: cleanDocName, startHour: startHour, endHour: endHour });
+      }
+    });
+
+    // 整理されたシフトを使ってマス目を埋める
+    parsedShifts.forEach(ps => {
+      for (let h = ps.startHour; h < ps.endHour; h++) {
         let idx = h - 9; // 9時ならインデックス0
         if (idx < 0 || idx > 11 || idx === 4 || idx === 5) continue; // 範囲外や休診時間はスキップ
-        
+
+        // ★修正：すでに1診目または2診目に「同じ医師」が入っている場合は二重配置しない
+        if (line1[idx] === ps.doctorName || line2[idx] === ps.doctorName) {
+          continue;
+        }
+
         // テトリスロジック：1診目が空いていれば1診目へ、埋まっていれば2診目へ
         if (line1[idx] === null || line1[idx] === "募集") {
-          line1[idx] = shift.doctorName;
+          line1[idx] = ps.doctorName;
         } else if (line2[idx] === null || line2[idx] === "募集") {
-          line2[idx] = shift.doctorName;
+          line2[idx] = ps.doctorName;
         }
       }
     });

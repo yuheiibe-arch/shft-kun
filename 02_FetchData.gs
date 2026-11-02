@@ -4,7 +4,8 @@
  * 外部シートからのデータ取得・解析・構造化
  * ★空白除去＆完全同一人物認識・強化版
  * ★セル内改行（複数シフト）の完全読み取り対応版
- * ★【追加】同セル内に「契約」と「確定」が混在する場合、「契約」行を優先抽出する機能
+ * ★同セル内に「契約」と「確定」が混在する場合、「契約」行を優先抽出する機能
+ * ★【追加】同一日・同一拠点・同一医師の重複シフト（2行記載など）の上書き統合機能
  * ==========================================
  */
 
@@ -149,7 +150,7 @@ function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locat
         let lines = rawCellText.split(/\r\n|\n|\r/);
         
         // ==========================================
-        // ★追加：セル内に「契約」と「確定」などが混在している場合、
+        // セル内に「契約」と「確定」などが混在している場合、
         // 「契約」が含まれる行のみを抽出して優先する。
         // （別拠点の兼務で「契約」が2行ある場合は両方残る）
         // ==========================================
@@ -161,6 +162,8 @@ function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locat
         lines.forEach(shiftStr => {
           shiftStr = shiftStr.trim();
           if (!shiftStr || shiftStr === "休") return;
+          // ★追加：「→欠勤」「→有給」などの矢印ステータス行が万が一時間を含んでいてもスキップ
+          if (shiftStr.startsWith("→")) return;
           
           const timeMatch = shiftStr.match(/([0-9]{1,2})[:：]?([0-9]{2})?\s*[-~～]\s*([0-9]{1,2})[:：]?([0-9]{2})?/);
           if (!timeMatch) return;
@@ -202,7 +205,7 @@ function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locat
           let finalDocName = docMasterEntry ? docMasterEntry.originalName : doc.name;
           finalDocName = finalDocName.replace(/[\s ]+/g, "").replace(/先生$/, "");
           
-          shiftData[cleanLoc][dateStr].push({
+          const newShiftObj = {
             doctorName: finalDocName,
             type: type,
             startTime: startTime,
@@ -212,7 +215,24 @@ function fetchKintaiData(extSs, year, term, targetLocations, doctorMaster, locat
             rawShift: shiftStr,
             wageInfo: docMasterEntry ? docMasterEntry.wageInfo : "",
             specialWageDetail: docMasterEntry ? docMasterEntry.specialWageDetail : ""
+          };
+
+          // ==========================================
+          // ★追加：同一日・同一拠点・同一医師で「時間帯が重なるシフト」が既に存在する場合は、
+          // 2人分に増殖させず、後から読み込んだ行（変更後の時間など）で上書きする
+          // ==========================================
+          const existingIdx = shiftData[cleanLoc][dateStr].findIndex(s => {
+            if (s.doctorName !== finalDocName) return false;
+            const existStartH = s.startHour;
+            const existEndH = s.startHour + s.hours;
+            return (startH < existEndH && endH > existStartH); // 時間帯が重なっているか判定
           });
+
+          if (existingIdx !== -1) {
+            shiftData[cleanLoc][dateStr][existingIdx] = newShiftObj;
+          } else {
+            shiftData[cleanLoc][dateStr].push(newShiftObj);
+          }
         });
       });
     }
